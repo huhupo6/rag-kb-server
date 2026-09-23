@@ -1,0 +1,15 @@
+# 虚拟环境
+venv/
+__pycache__/
+*.pyc
+
+# 环境变量与敏感信息
+.env
+*.env
+
+# 数据库与日志
+db.sqlite3
+*.log
+
+# 上传的媒体文件
+media/
