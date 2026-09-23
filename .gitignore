@@ -11,5 +11,5 @@ __pycache__/
 db.sqlite3
 *.log
 
-# 上传的媒体文件
+# 用户上传的媒体文件
 media/
