@@ -1,7 +1,9 @@
 import os
-from pathlib import Path
 from dotenv import load_dotenv
+from pathlib import Path
+from datetime import timedelta
 
+# 加载.env文件中的环境变量
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -10,9 +12,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-# 校验请求头 Host
-ALLOWED_HOSTS = []
+# 限制哪些域名 / 主机访问后端。
+ALLOWED_HOSTS = ['*']
 
+# 注册项目中启用的应用
 INSTALLED_APPS = [
     'django.contrib.admin',         # 后台管理站点 
     'django.contrib.auth',          # 用户身份认证系统
@@ -21,6 +24,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',      # 消息闪现（页面一次性提示）
     'django.contrib.staticfiles',   # 静态文件处理（css/js图片）
     'rest_framework',               # DRF
+    'rest_framework_simplejwt',     # JWT
     'corsheaders',                  # 跨域头中间件
 
     # accounts app用于管理用户信息，租户隔离、用户身份认证、角色权限
@@ -31,6 +35,7 @@ INSTALLED_APPS = [
     'chat',
 ]
 
+# 中间件
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',                    # 前后端跨域请求
     'django.middleware.security.SecurityMiddleware',            # 添加安全响应头
@@ -45,6 +50,7 @@ MIDDLEWARE = [
 # 根路由
 ROOT_URLCONF = 'kb_project.urls'
 
+# 模板
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -60,9 +66,10 @@ TEMPLATES = [
     },
 ]
 
+# WSGI应用入口
 WSGI_APPLICATION = 'kb_project.wsgi.application'
 
-# MySQL
+# 数据库配置
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -75,6 +82,7 @@ DATABASES = {
     }
 }
 
+# 系统默认校验器
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -92,19 +100,58 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # 简体中文
 LANGUAGE_CODE = 'zh-hans'
-
 # 北京时间
 TIME_ZONE = 'Asia/Shanghai'
-
+# 多语言翻译功能
 USE_I18N = True
-
+# 时区支持
 USE_TZ = False
-
+# 静态资源访问的 URL 前缀
 STATIC_URL = 'static/'
-
+# 默认主键字段指定
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Redis 配置
+REDIS_HOST = os.getenv('REDIS_HOST')
+REDIS_PORT = os.getenv('REDIS_PORT')
+REDIS_DB = os.getenv('REDIS_DB')
+REDIS_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
+
+# Celery 配置
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Asia/Shanghai'
+
+# JWT 配置
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.AllowAny',  # 默认允许，具体接口再单独控制
+    ),
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),   # Access Token 有效期 24 小时
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),    # Refresh Token 有效期 7 天
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+}
+
+# 邮件配置
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.qq.com'
+EMAIL_PORT = 465
+EMAIL_USE_SSL = True
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 # 前端跨域访问后端
 CORS_ALLOW_ALL_ORIGINS = True
-
 # CORS_ALLOWED_ORIGINS = []
