@@ -2,6 +2,7 @@
 import re
 # 2. Django
 from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import check_password
 from django.db import transaction
 # 3. DRF
 from rest_framework import serializers
@@ -9,6 +10,7 @@ from rest_framework import serializers
 from .models import Tenant, User
 from .utils import redis_client
 
+# 企业注册 序列化器
 class RegisterSerializer(serializers.Serializer):
     company_name = serializers.CharField(max_length=100, label='公司名称')
     full_name = serializers.CharField(max_length=50, label='姓名')
@@ -60,3 +62,33 @@ class RegisterSerializer(serializers.Serializer):
             redis_client.delete(f'reg_code:{validated_data["email"]}')
 
         return user
+
+# 统一登录 序列化器
+class LoginSerializer(serializers.Serializer):
+    email = serializers.EmailField(label='邮箱')
+    password = serializers.CharField(write_only=True, label='密码')
+
+    def validate(self, attrs):
+        email = attrs['email']
+        password = attrs['password']
+
+        # 1. 根据邮箱查用户
+        user = User.objects.filter(email=email).first()
+        if not user:
+            raise serializers.ValidationError('邮箱或密码错误')
+
+        # 2. 校验密码
+        if not check_password(password, user.password):
+            raise serializers.ValidationError('邮箱或密码错误')
+
+        # 3. 校验账号是否可用
+        if not user.is_active:
+            raise serializers.ValidationError('该账号未激活或封禁，请联系公司管理人员')
+
+        # 4. 校验租户是否被封禁
+        if user.tenant and not user.tenant.is_active:
+            raise serializers.ValidationError('所属公司已被停用，请联系平台方')
+
+        # 5. 把内存里user对象，放进attrs字典，方便视图取用
+        attrs['user'] = user
+        return attrs
