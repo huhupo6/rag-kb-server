@@ -9,8 +9,8 @@ class TenantAdmin(admin.ModelAdmin):
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
     # 后台展示字段
-    list_display = ('id', 'email', 'full_name', 'role', 'role_type', 'tenant', 'is_active')
+    list_display = ('id', 'email', 'full_name', 'role', 'role_type', 'tenant', 'status')
     # 后台筛选字段
-    list_filter = ('role', 'role_type', 'is_active')
+    list_filter = ('role', 'role_type', 'status')
     # 后台可搜索字段
     search_fields = ('email', 'full_name')

@@ -1,9 +1,14 @@
 # 1. Python内置
 import re
+import secrets
+from datetime import timedelta
 # 2. Django
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.hashers import check_password
 from django.db import transaction
+from django.utils import timezone
+from django.core.mail import send_mail
+from django.conf import settings
 # 3. DRF
 from rest_framework import serializers
 # 4. 当前app自定义代码
@@ -55,7 +60,7 @@ class RegisterSerializer(serializers.Serializer):
                 full_name=validated_data['full_name'],
                 role='owner',        # 角色：董事
                 role_type='',        # 董事/员工为空
-                is_active=True,      # 注册即激活，不用邮件激活码激活
+                status='active',      # 注册即在职，不用邮件激活码激活
             )
 
             # 4. 注册成功后，删掉 Redis 里的验证码
@@ -81,14 +86,78 @@ class LoginSerializer(serializers.Serializer):
         if not check_password(password, user.password):
             raise serializers.ValidationError('邮箱或密码错误')
 
-        # 3. 校验账号是否可用
-        if not user.is_active:
-            raise serializers.ValidationError('该账号未激活或封禁，请联系公司管理人员')
+        # 3. 校验账号状态是否可用
+        if user.status == 'pending':
+            raise serializers.ValidationError('账号未激活，请查收邀请邮件')
+        if user.status == 'resigned':
+            raise serializers.ValidationError('账号已离职或被禁用')
+        if user.status == 'expired':
+            raise serializers.ValidationError('邀请已过期，请联系管理员重新邀请')
 
-        # 4. 校验租户是否被封禁
-        if user.tenant and not user.tenant.is_active:
-            raise serializers.ValidationError('所属公司已被停用，请联系平台方')
-
-        # 5. 把内存里user对象，放进attrs字典，方便视图取用
+        # 4. 把内存里user对象，放进attrs字典，方便视图取用
         attrs['user'] = user
         return attrs
+
+# 董事邀请员工、HR、法务 序列化器
+class InviteSerializer(serializers.Serializer):
+    email = serializers.EmailField(label='邮箱')
+    full_name = serializers.CharField(max_length=50, label='姓名')
+    role = serializers.ChoiceField(choices=['admin', 'member'], label='系统角色')
+    role_type = serializers.ChoiceField(choices=['hr', 'legal', ''], default='', required=False, label='管理员类型')
+
+    def validate(self, attrs):
+        request_user = self.context['request'].user
+
+        # 1. 权限校验：只有 owner 和 hr 能邀请
+        if request_user.role not in ['owner', 'hr']:
+            raise serializers.ValidationError('您没有权限邀请用户')
+
+        # 2. HR 只能邀请员工（member）
+        if request_user.role == 'admin' and request_user.role_type == 'hr':
+            if attrs['role'] != 'member':
+                raise serializers.ValidationError('HR 只能邀请员工')
+
+        # 3. 董事邀请HR或法务时，必须指定管理员类型
+        if attrs['role'] == 'admin' and attrs['role_type'] not in ['hr', 'legal']:
+            raise serializers.ValidationError('邀请管理员时必须指定 HR 或法务')
+
+        # 4. 董事邀请员工时，管理员类型必须为空
+        if attrs['role'] == 'member' and attrs['role_type'] != '':
+            raise serializers.ValidationError('邀请员工时 role_type 必须为空')
+
+        # 5. 邮箱不能重复
+        if User.objects.filter(email=attrs['email']).exists():
+            raise serializers.ValidationError('该邮箱已被注册')
+
+        return attrs
+
+    def create(self, validated_data):
+        request_user = self.context['request'].user
+
+        # 生成激活令牌，24 小时有效
+        token = secrets.token_urlsafe(32)
+
+        user = User.objects.create(
+            tenant=request_user.tenant,
+            email=validated_data['email'],
+            full_name=validated_data['full_name'],
+            password='',
+            role=validated_data['role'],
+            role_type=validated_data['role_type'],
+            status='pending',
+            activation_token=token,
+            activation_token_expires_at=timezone.now() + timedelta(hours=24),
+        )
+
+        # 发送邀请邮件
+        send_mail(
+            subject='【知识库系统】您已被邀请加入',
+            message=f'{request_user.full_name} 邀请您加入 {request_user.tenant.name}，'
+                    f'请点击链接激活账号并设置密码：\n'
+                    f'http://127.0.0.1:8000/api/accounts/activate/?token={token}',
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+
+        return user

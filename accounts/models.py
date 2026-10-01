@@ -34,10 +34,19 @@ class User(models.Model):
     ('', '无'),
     ]
 
+    # status：账号状态
+    STATUS_CHOICES = [
+        ('pending', '待激活'),
+        ('active', '在职'),
+        ('resigned', '已离职'),
+    ]
+
     # tenant_id
     tenant = models.ForeignKey('Tenant', on_delete=models.PROTECT)
     # 邮箱
     email = models.EmailField(unique=True, verbose_name='邮箱')
+    # 原始邮箱
+    original_email = models.EmailField(blank=True, verbose_name='原始邮箱')
     # 密码
     password = models.CharField(max_length=128, blank=True, verbose_name='密码')
     # 姓名
@@ -48,7 +57,7 @@ class User(models.Model):
     role_type = models.CharField(max_length=20, choices=ROLE_TYPE_CHOICES, blank=True, default='', verbose_name='管理员类型')
     
     # 账号状态，默认不可用
-    is_active = models.BooleanField(default=False, verbose_name='是否启用')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='账号状态')
     # 激活令牌，只用一次
     activation_token = models.CharField(max_length=64, blank=True, verbose_name='激活令牌')
     # 令牌过期时间
@@ -59,6 +68,26 @@ class User(models.Model):
     invited_at = models.DateTimeField(auto_now_add=True, verbose_name='邀请时间')
     # 激活时间
     activated_at = models.DateTimeField(null=True, blank=True, verbose_name='激活时间')
+
+    # Django 认证系统需要的类属性
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = []
+
+    
+    @property
+    def is_active(self):
+        return self.status == 'active'
+
+    @property
+    def is_anonymous(self):
+        return False
+
+    @property
+    def is_authenticated(self):
+        return True
+
+    def get_username(self):
+        return self.email
 
     class Meta:
         db_table = 'users'

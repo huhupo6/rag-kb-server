@@ -35,6 +35,9 @@ INSTALLED_APPS = [
     'chat',
 ]
 
+# 自定义的用户模型
+AUTH_USER_MODEL = 'accounts.User'
+
 # 中间件
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',                    # 前后端跨域请求

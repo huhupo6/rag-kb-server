@@ -10,4 +10,6 @@ urlpatterns = [
     path('register/', views.register, name='register'),
     # 统一登录
     path('login/', views.login, name='login'),
+    # 董事邀请员工、HR、法务
+    path('invite/', views.invite, name='invite'),
 ]
