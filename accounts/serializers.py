@@ -98,7 +98,7 @@ class LoginSerializer(serializers.Serializer):
         attrs['user'] = user
         return attrs
 
-# 董事邀请员工、HR、法务 序列化器
+# 董事邀请员工、HR、法务 / HR邀请员工 序列化器
 class InviteSerializer(serializers.Serializer):
     email = serializers.EmailField(label='邮箱')
     full_name = serializers.CharField(max_length=50, label='姓名')
@@ -108,16 +108,18 @@ class InviteSerializer(serializers.Serializer):
     def validate(self, attrs):
         request_user = self.context['request'].user
 
-        # 1. 权限校验：只有 owner 和 hr 能邀请
-        if request_user.role not in ['owner', 'hr']:
+        # 1. 身份判断：董事长 / HR
+        is_owner = request_user.role == 'owner'
+        is_hr = request_user.role == 'admin' and request_user.role_type == 'hr'
+
+        if not (is_owner or is_hr):
             raise serializers.ValidationError('您没有权限邀请用户')
 
         # 2. HR 只能邀请员工（member）
-        if request_user.role == 'admin' and request_user.role_type == 'hr':
-            if attrs['role'] != 'member':
-                raise serializers.ValidationError('HR 只能邀请员工')
-
-        # 3. 董事邀请HR或法务时，必须指定管理员类型
+        if is_hr and attrs['role'] != 'member':
+            raise serializers.ValidationError('HR 只能邀请员工')
+        
+        # 3. 董事邀请HR或法务时，必须指定是 HR 或 法务
         if attrs['role'] == 'admin' and attrs['role_type'] not in ['hr', 'legal']:
             raise serializers.ValidationError('邀请管理员时必须指定 HR 或法务')
 
@@ -161,3 +163,51 @@ class InviteSerializer(serializers.Serializer):
         )
 
         return user
+
+# 激活账号 序列化器
+class ActivateSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    password = serializers.CharField(min_length=6, write_only=True)
+    confirm_password = serializers.CharField(min_length=6, write_only=True)
+
+    def validate(self, attrs):
+        # 校验两次密码是否一致
+        if attrs['password'] != attrs['confirm_password']:
+            raise serializers.ValidationError('两次输入的密码不一致')
+        return attrs
+
+    def create(self, validated_data):
+
+        with transaction.atomic():
+            # 加行锁，防止一个邀请码被两个人同时激活，导致数据异常
+            user = User.objects.select_for_update().filter(
+                activation_token=validated_data['token']
+            ).first()
+
+            # 判断激活码是否有效
+            if not user:
+                raise serializers.ValidationError('无效的激活链接')
+
+            # 判断所属公司是否被停用
+            if user.tenant and not user.tenant.is_active:
+                raise serializers.ValidationError('所属公司已被平台停用')
+
+            # 判断账号状态是否处于待激活状态
+            if user.status != 'pending':
+                raise serializers.ValidationError('该账号已激活或链接已失效')
+
+            # 判断激活码是否过期
+            if user.activation_token_expires_at < timezone.now():
+                user.status = 'expired'
+                user.save()
+                raise serializers.ValidationError('激活链接已过期')
+
+            # 数据库更新：设置密码、激活账号、清空激活码
+            user.password = make_password(validated_data['password'])
+            user.status = 'active'
+            user.activated_at = timezone.now()
+            user.activation_token = ''
+            user.activation_token_expires_at = None
+            user.save()
+
+            return user

@@ -12,4 +12,6 @@ urlpatterns = [
     path('login/', views.login, name='login'),
     # 董事邀请员工、HR、法务
     path('invite/', views.invite, name='invite'),
+    # 激活账号
+    path('activate/', views.activate, name='activate'),
 ]

@@ -10,7 +10,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 # 4. 当前app自定义代码
 from .models import User
 from .utils import redis_client
-from .serializers import RegisterSerializer, LoginSerializer, InviteSerializer
+from .serializers import RegisterSerializer, LoginSerializer, InviteSerializer, ActivateSerializer
 
 # 发送验证码接口视图
 @api_view(['POST'])
@@ -104,7 +104,7 @@ def login(request):
     # 校验失败，返回错误信息
     return Response(serializer.errors, status=400)
 
-# 董事邀请员工、HR、法务 视图
+# 董事邀请员工、HR、法务 / HR邀请员工 视图
 @api_view(['POST'])
 def invite(request):
     serializer = InviteSerializer(data=request.data, context={'request': request})
@@ -120,4 +120,13 @@ def invite(request):
                 'role_type': user.role_type,
             }
         }, status=201)
+    return Response(serializer.errors, status=400)
+
+# 激活账号 视图
+@api_view(['POST'])
+def activate(request):
+    serializer = ActivateSerializer(data=request.data)
+    if serializer.is_valid():
+        serializer.save()
+        return Response({'message': '激活成功，请前往登录'}, status=200)
     return Response(serializer.errors, status=400)
