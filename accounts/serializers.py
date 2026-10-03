@@ -14,6 +14,7 @@ from rest_framework import serializers
 # 4. 当前app自定义代码
 from .models import Tenant, User
 from .utils import redis_client
+from .utils import check_tenant_active
 
 # 企业注册 序列化器
 class RegisterSerializer(serializers.Serializer):
@@ -86,15 +87,30 @@ class LoginSerializer(serializers.Serializer):
         if not check_password(password, user.password):
             raise serializers.ValidationError('邮箱或密码错误')
 
-        # 3. 校验账号状态是否可用
-        if user.status == 'pending':
-            raise serializers.ValidationError('账号未激活，请查收邀请邮件')
-        if user.status == 'resigned':
-            raise serializers.ValidationError('账号已离职或被禁用')
-        if user.status == 'expired':
-            raise serializers.ValidationError('邀请已过期，请联系管理员重新邀请')
+        # 3. 校验账号状态
+        if user.status != 'active':
+            status_messages = {
+                'pending': '账号未激活，请查收邀请邮件',
+                'resigned': '账号已离职或被禁用',
+                'expired': '邀请已过期，请联系管理员重新邀请',
+            }
+            raise serializers.ValidationError(
+                status_messages.get(user.status, '账号状态异常，请联系管理员')
+            )
 
-        # 4. 把内存里user对象，放进attrs字典，方便视图取用
+        # 4. 【新增】校验租户状态
+        if user.tenant:
+            tenant_messages = {
+                'suspended': '所属公司服务已暂停，请联系管理员续费',
+                'banned': '所属公司已被封禁，请联系平台管理员',
+                'cancelled': '所属公司已注销',
+            }
+            if user.tenant.status != 'active':
+                raise serializers.ValidationError(
+                    tenant_messages.get(user.tenant.status, '所属公司状态异常')
+                )
+
+        # 5. 把内存里 user 对象放进 attrs，方便视图取用
         attrs['user'] = user
         return attrs
 
@@ -107,6 +123,9 @@ class InviteSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         request_user = self.context['request'].user
+
+        # 统一租户校验
+        check_tenant_active(request_user)
 
         # 1. 身份判断：董事长 / HR
         is_owner = request_user.role == 'owner'
@@ -189,8 +208,9 @@ class ActivateSerializer(serializers.Serializer):
                 raise serializers.ValidationError('无效的激活链接')
 
             # 判断所属公司是否被停用
-            if user.tenant and not user.tenant.is_active:
+            if user.tenant and user.tenant.status != 'active':
                 raise serializers.ValidationError('所属公司已被平台停用')
+
 
             # 判断账号状态是否处于待激活状态
             if user.status != 'pending':

@@ -2,10 +2,21 @@ from django.db import models
 
 # tenants 租户表
 class Tenant(models.Model):
+    STATUS_CHOICES = [
+        ('active', '正常使用'),      # 正常使用
+        ('suspended', '暂停服务'),   # 欠费
+        ('banned', '已封禁'),        # 违规被封禁
+        ('cancelled', '已注销'),     # 企业主动注销
+    ]
     # 企业名称
     name = models.CharField(max_length=100, verbose_name='企业名称')
     # 企业状态
-    is_active = models.BooleanField(default=True, verbose_name='是否启用')
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='active',
+        verbose_name='租户状态'
+    )
     # 注册时间
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='注册时间')
 
@@ -38,11 +49,13 @@ class User(models.Model):
     STATUS_CHOICES = [
         ('pending', '待激活'),
         ('active', '在职'),
-        ('resigned', '已离职'),
+        ('resigned', '已离职'),  # 默认注销 = 已离职
+        ('expired', '邀请已过期'),
     ]
 
     # tenant_id
-    tenant = models.ForeignKey('Tenant', on_delete=models.PROTECT)
+    tenant = models.ForeignKey('Tenant', on_delete=models.PROTECT, null=True, blank=True,        # ← 新增可空
+        verbose_name='所属公司')
     # 邮箱
     email = models.EmailField(unique=True, verbose_name='邮箱')
     # 原始邮箱
@@ -73,7 +86,6 @@ class User(models.Model):
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
 
-    
     @property
     def is_active(self):
         return self.status == 'active'
@@ -88,6 +100,12 @@ class User(models.Model):
 
     def get_username(self):
         return self.email
+
+    def has_perm(self, perm, obj=None):
+        return False
+
+    def has_module_perms(self, app_label):
+        return False
 
     class Meta:
         db_table = 'users'

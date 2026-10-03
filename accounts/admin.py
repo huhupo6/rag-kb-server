@@ -4,8 +4,10 @@ from .models import Tenant, User
 @admin.register(Tenant)
 class TenantAdmin(admin.ModelAdmin):
     # 后台展示字段
-    list_display = ('id', 'name', 'is_active', 'created_at')
-
+    list_display = ('id', 'name', 'status', 'created_at')
+    list_filter = ('status',)
+    search_fields = ('name',)
+    
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
     # 后台展示字段
