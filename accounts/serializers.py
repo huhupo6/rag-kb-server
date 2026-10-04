@@ -114,11 +114,11 @@ class LoginSerializer(serializers.Serializer):
         attrs['user'] = user
         return attrs
 
-# 董事邀请员工、HR、法务 / HR邀请员工 序列化器
+# 董事邀请董事长、HR、法务、员工 / HR只能邀请员工 序列化器
 class InviteSerializer(serializers.Serializer):
     email = serializers.EmailField(label='邮箱')
     full_name = serializers.CharField(max_length=50, label='姓名')
-    role = serializers.ChoiceField(choices=['admin', 'member'], label='系统角色')
+    role = serializers.ChoiceField(choices=['owner', 'admin', 'member'], label='系统角色')
     role_type = serializers.ChoiceField(choices=['hr', 'legal', ''], default='', required=False, label='管理员类型')
 
     def validate(self, attrs):
@@ -134,16 +134,20 @@ class InviteSerializer(serializers.Serializer):
         if not (is_owner or is_hr):
             raise serializers.ValidationError('您没有权限邀请用户')
 
-        # 2. HR 只能邀请员工（member）
+        # 2. HR 只能邀请员工
         if is_hr and attrs['role'] != 'member':
             raise serializers.ValidationError('HR 只能邀请员工')
-        
-        # 3. 董事邀请HR或法务时，必须指定是 HR 或 法务
-        if attrs['role'] == 'admin' and attrs['role_type'] not in ['hr', 'legal']:
-            raise serializers.ValidationError('邀请管理员时必须指定 HR 或法务')
 
-        # 4. 董事邀请员工时，管理员类型必须为空
-        if attrs['role'] == 'member' and attrs['role_type'] != '':
+        # 3. 只有董事长能邀请另一位董事长
+        if attrs['role'] == 'owner' and not is_owner:
+            raise serializers.ValidationError('只有董事长可以邀请另一位董事长')
+        
+        # 4. 董事邀请 HR 或 法务 时，必须指定是 HR 或 法务
+        if attrs['role'] == 'admin' and attrs['role_type'] not in ['hr', 'legal']:
+            raise serializers.ValidationError('邀请管理员时必须指定 HR 或 法务')
+
+        # 5. 董事邀请员工或董事长时，管理员类型必须为空
+        if attrs['role'] in ['member', 'owner'] and attrs['role_type'] != '':
             raise serializers.ValidationError('邀请员工时 role_type 必须为空')
 
         # 5. 邮箱不能重复

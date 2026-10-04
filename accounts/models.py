@@ -29,7 +29,7 @@ class Tenant(models.Model):
     def __str__(self):
         return self.name
 
-# user 用户表
+# users 用户表
 class User(models.Model):
     # role：系统权限角色
     ROLE_CHOICES = [
@@ -54,8 +54,12 @@ class User(models.Model):
     ]
 
     # tenant_id
-    tenant = models.ForeignKey('Tenant', on_delete=models.PROTECT, null=True, blank=True,        # ← 新增可空
-        verbose_name='所属公司')
+    tenant = models.ForeignKey(
+        'Tenant', 
+        on_delete=models.PROTECT, 
+        null=True, blank=True, 
+        verbose_name='所属公司'
+        )
     # 邮箱
     email = models.EmailField(unique=True, verbose_name='邮箱')
     # 原始邮箱
@@ -71,6 +75,10 @@ class User(models.Model):
     
     # 账号状态，默认不可用
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='账号状态')
+    # 平台封禁
+    is_banned = models.BooleanField(default=False, verbose_name='是否被平台封禁')
+    banned_at = models.DateTimeField(null=True, blank=True, verbose_name='封禁时间')
+    
     # 激活令牌，只用一次
     activation_token = models.CharField(max_length=64, blank=True, verbose_name='激活令牌')
     # 令牌过期时间
@@ -88,7 +96,7 @@ class User(models.Model):
 
     @property
     def is_active(self):
-        return self.status == 'active'
+        return self.status == 'active' and not self.is_banned
 
     @property
     def is_anonymous(self):
