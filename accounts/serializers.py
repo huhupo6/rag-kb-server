@@ -1,20 +1,20 @@
 # 1. Python内置
-import re
 import secrets
 from datetime import timedelta
+
 # 2. Django
-from django.contrib.auth.hashers import make_password
-from django.contrib.auth.hashers import check_password
+from django.contrib.auth.hashers import make_password, check_password
 from django.db import transaction
 from django.utils import timezone
 from django.core.mail import send_mail
 from django.conf import settings
+
 # 3. DRF
 from rest_framework import serializers
+
 # 4. 当前app自定义代码
-from .models import Tenant, User
-from .utils import redis_client
-from .utils import check_tenant_active
+from .models import Tenant, User, BannedEmail
+from .utils import redis_client, check_tenant_active
 
 # 企业注册 序列化器
 class RegisterSerializer(serializers.Serializer):
@@ -25,7 +25,11 @@ class RegisterSerializer(serializers.Serializer):
     confirm_password = serializers.CharField(min_length=6, write_only=True, label='确认密码')
     code = serializers.CharField(max_length=6, label='验证码')
 
-    def valiadte_email(self, value):
+    def validate_email(self, value):
+        # 检查邮箱是否被平台封禁
+        if BannedEmail.objects.filter(email=value, is_active=True).exists():
+            raise serializers.ValidationError('该邮箱已被封禁，无法注册')
+
         # 检验邮箱是否未被注册
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError('该邮箱已被注册')
@@ -42,7 +46,7 @@ class RegisterSerializer(serializers.Serializer):
         saved_code = redis_client.get(f'reg_code:{email}')
 
         if not saved_code or saved_code != code:
-                raise serializers.ValidationError('验证码错误或已过期')
+            raise serializers.ValidationError('验证码错误或已过期')
 
         return attrs
 
@@ -57,6 +61,7 @@ class RegisterSerializer(serializers.Serializer):
             user = User.objects.create(
                 tenant=tenant,
                 email=validated_data['email'],
+                original_email=validated_data['email'],
                 password=make_password(validated_data['password']),  # 密码加密
                 full_name=validated_data['full_name'],
                 role='owner',        # 角色：董事
@@ -87,30 +92,24 @@ class LoginSerializer(serializers.Serializer):
         if not check_password(password, user.password):
             raise serializers.ValidationError('邮箱或密码错误')
 
-        # 3. 校验账号状态
+        # 3. 校验账号是否被封禁
+        if user.is_banned:
+            raise serializers.ValidationError('账号已被平台封禁，请联系平台客服')
+
+        # 4. 校验账号状态
         if user.status != 'active':
             status_messages = {
-                'pending': '账号未激活，请查收邀请邮件',
-                'resigned': '账号已离职或被禁用',
-                'expired': '邀请已过期，请联系管理员重新邀请',
+                'pending': '账号未激活，请留意企业邀请邮件',
+                'resigned': '账号已离职，请联系企业管理员',
+                'expired': '邀请已过期，请联系企业管理员重新邀请',
             }
             raise serializers.ValidationError(
-                status_messages.get(user.status, '账号状态异常，请联系管理员')
+                status_messages.get(user.status, '账号状态异常，请联系企业管理员')
             )
 
-        # 4. 【新增】校验租户状态
-        if user.tenant:
-            tenant_messages = {
-                'suspended': '所属公司服务已暂停，请联系管理员续费',
-                'banned': '所属公司已被封禁，请联系平台管理员',
-                'cancelled': '所属公司已注销',
-            }
-            if user.tenant.status != 'active':
-                raise serializers.ValidationError(
-                    tenant_messages.get(user.tenant.status, '所属公司状态异常')
-                )
+        # 5. 校验租户状态
+        check_tenant_active(user)
 
-        # 5. 把内存里 user 对象放进 attrs，方便视图取用
         attrs['user'] = user
         return attrs
 
@@ -150,7 +149,11 @@ class InviteSerializer(serializers.Serializer):
         if attrs['role'] in ['member', 'owner'] and attrs['role_type'] != '':
             raise serializers.ValidationError('邀请员工时 role_type 必须为空')
 
-        # 5. 邮箱不能重复
+        # 6. 邮箱封禁检查
+        if BannedEmail.objects.filter(email=attrs['email'], is_active=True).exists():
+            raise serializers.ValidationError('该邮箱已被封禁，无法邀请')
+
+        # 7. 邮箱不能重复
         if User.objects.filter(email=attrs['email']).exists():
             raise serializers.ValidationError('该邮箱已被注册')
 
@@ -179,7 +182,7 @@ class InviteSerializer(serializers.Serializer):
             subject='【知识库系统】您已被邀请加入',
             message=f'{request_user.full_name} 邀请您加入 {request_user.tenant.name}，'
                     f'请点击链接激活账号并设置密码：\n'
-                    f'http://127.0.0.1:8000/api/accounts/activate/?token={token}',
+                    f'http://localhost:5173/activate?token={token}',  # 地址需要指向前端页面
                     from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
             fail_silently=False,
@@ -210,6 +213,10 @@ class ActivateSerializer(serializers.Serializer):
             # 判断激活码是否有效
             if not user:
                 raise serializers.ValidationError('无效的激活链接')
+
+            # 判断账号是否被封禁
+            if user.is_banned:
+                raise serializers.ValidationError('账号已被平台封禁，请联系平台客服')
 
             # 判断所属公司是否被停用
             if user.tenant and user.tenant.status != 'active':

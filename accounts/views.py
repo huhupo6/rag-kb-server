@@ -1,18 +1,21 @@
 # 1. Python内置
 import random
+
 # 2. Django
 from django.core.mail import send_mail
 from django.conf import settings
+
 # 3. DRF
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
+
 # 4. 当前app自定义代码
-from .models import User
+from .models import User, BannedEmail
 from .utils import redis_client
 from .serializers import RegisterSerializer, LoginSerializer, InviteSerializer, ActivateSerializer
 
-# 发送验证码接口视图
+# 发送验证码视图
 @api_view(['POST'])
 def send_verification_code(request):
     email = request.data.get('email', '').strip()
@@ -21,22 +24,26 @@ def send_verification_code(request):
     if not email:
         return Response({'error': '请输入邮箱'}, status=400)
 
-    # 2. 检查邮箱是否已被注册（董事注册时，一个邮箱只能注册一次）
+    # 2. 检查邮箱是否被平台封禁
+    if BannedEmail.objects.filter(email=email).exists():
+        return Response({'error': '该邮箱已被平台封禁，请联系客服'}, status=400)
+
+    # 3. 检查邮箱是否已被注册（董事注册时，一个邮箱只能注册一次）
     if User.objects.filter(email=email).exists():
         return Response({'error': '该邮箱已被注册'}, status=400)
 
-    # 3. 频率限制：同一邮箱 60 秒内只能发一次
+    # 4. 同一邮箱 60 秒内只能发一次
     if redis_client.exists(f'reg_code_limit:{email}'):
         return Response({'error': '验证码已发送，请 60 秒后再试'}, status=429)
 
-    # 4. 生成 6 位数字验证码
+    # 5. 生成 6 位数字验证码
     code = ''.join(random.choices('0123456789', k=6))
     
-    # 5. 存入 Redis，5 分钟过期，60 秒不能重复发送
+    # 6. 存入 Redis，5 分钟过期，60 秒不能重复发送
     redis_client.setex(f'reg_code:{email}', 300, code)
     redis_client.setex(f'reg_code_limit:{email}', 60, '1')
 
-    # 6. 发送邮件
+    # 7. 发送邮件
     try:
         send_mail(
             subject='【企业知识库】注册验证码',
@@ -50,7 +57,7 @@ def send_verification_code(request):
 
     return Response({'message': '验证码已发送，请查收邮箱'})
 
-# 企业注册接口视图
+# 企业注册视图
 @api_view(['POST'])
 def register(request):
     serializer = RegisterSerializer(data=request.data)

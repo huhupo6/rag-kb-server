@@ -18,10 +18,10 @@ redis_client = redis.Redis(
 def check_tenant_active(user):
     if user.tenant and user.tenant.status != 'active':
         status_messages = {
-            'suspended': '所属公司服务已暂停，请联系管理员续费',
-            'banned': '所属公司已被封禁，请联系平台管理员',
+            'suspended': '所属公司服务已暂停，请联系企业管理员处理',
+            'banned': '所属公司已被封禁，请联系平台客服',
             'cancelled': '所属公司已注销',
         }
         raise PermissionDenied(
-            status_messages.get(user.tenant.status, '所属公司状态异常')
+            status_messages.get(user.tenant.status, '所属公司状态异常，请联系平台客服')
         )

@@ -12,10 +12,10 @@ class Tenant(models.Model):
     name = models.CharField(max_length=100, verbose_name='企业名称')
     # 企业状态
     status = models.CharField(
-        max_length=20,
-        choices=STATUS_CHOICES,
-        default='active',
-        verbose_name='租户状态'
+        max_length=20, 
+        choices=STATUS_CHOICES, 
+        default='active', 
+        verbose_name='租户状态' 
     )
     # 注册时间
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='注册时间')
@@ -31,18 +31,18 @@ class Tenant(models.Model):
 
 # users 用户表
 class User(models.Model):
-    # role：系统权限角色
+    # role：一级权限
     ROLE_CHOICES = [
-        ('owner', '董事'),
-        ('admin', '管理员'),
-        ('member', '员工'),
+        ('owner', '董事'), 
+        ('admin', '管理员'), 
+        ('member', '员工'), 
     ]
 
-    # role_type：业务岗位标签
+    # role_type：二级权限
     ROLE_TYPE_CHOICES = [
-    ('hr', 'HR'),
-    ('legal', '法务'),
-    ('', '无'),
+    ('hr', 'HR'), 
+    ('legal', '法务'), 
+    ('', '无'), 
     ]
 
     # status：账号状态
@@ -70,20 +70,33 @@ class User(models.Model):
     full_name = models.CharField(max_length=50, verbose_name='姓名')
 
     # 角色与权限，默认为员工
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='member', verbose_name='系统角色')
-    role_type = models.CharField(max_length=20, choices=ROLE_TYPE_CHOICES, blank=True, default='', verbose_name='管理员类型')
+    role = models.CharField(
+        max_length=20, 
+        choices=ROLE_CHOICES, 
+        default='member', 
+        verbose_name='系统角色'
+        )
+    role_type = models.CharField(
+        max_length=20, 
+        choices=ROLE_TYPE_CHOICES, 
+        blank=True, default='', 
+        verbose_name='管理员类型'
+        )
     
     # 账号状态，默认不可用
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending', verbose_name='账号状态')
-    # 平台封禁
-    is_banned = models.BooleanField(default=False, verbose_name='是否被平台封禁')
-    banned_at = models.DateTimeField(null=True, blank=True, verbose_name='封禁时间')
+    status = models.CharField(
+        max_length=20, 
+        choices=STATUS_CHOICES, 
+        default='pending',      # 待激活
+        verbose_name='账号状态'
+        )
     
     # 激活令牌，只用一次
     activation_token = models.CharField(max_length=64, blank=True, verbose_name='激活令牌')
     # 令牌过期时间
     activation_token_expires_at = models.DateTimeField(
-        null=True, blank=True, verbose_name='令牌过期时间'
+        null=True, blank=True, 
+        verbose_name='令牌过期时间'
         )
     # 邀请时间
     invited_at = models.DateTimeField(auto_now_add=True, verbose_name='邀请时间')
@@ -93,6 +106,14 @@ class User(models.Model):
     # Django 认证系统需要的类属性
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
+
+    # 实时查询 BannedEmail 表，判断当前邮箱是否被封禁
+    @property
+    def is_banned(self):
+        emails = [self.email]
+        if self.original_email:
+            emails.append(self.original_email)
+        return BannedEmail.objects.filter(email__in=emails, is_active=True).exists()
 
     @property
     def is_active(self):
@@ -122,3 +143,23 @@ class User(models.Model):
 
     def __str__(self):
         return f'{self.full_name}({self.get_role_display()})'
+
+# banned_emails 封禁邮箱表
+class BannedEmail(models.Model):
+    email = models.EmailField(unique=True, verbose_name='被封禁的邮箱')
+    banned_at = models.DateTimeField(auto_now_add=True, verbose_name='封禁时间')
+    is_active = models.BooleanField(default=True, verbose_name='是否生效')
+    unbanned_at = models.DateTimeField(null=True, blank=True, verbose_name='解封时间')
+
+
+    class Meta:
+        db_table = 'banned_emails'
+        verbose_name = '平台封禁邮箱'
+        verbose_name_plural = '平台封禁邮箱'
+
+    def __str__(self):
+        if self.is_active:
+            status = '生效中'
+        else:
+            status = '已解封'
+        return f'{self.email}（{status}）'
