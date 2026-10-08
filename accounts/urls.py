@@ -14,4 +14,6 @@ urlpatterns = [
     path('invite/', views.invite, name='invite'),
     # 激活账号
     path('activate/', views.activate, name='activate'),
+    # 角色委任
+    path('assign-role/', views.assign_role, name='assign_role'),
 ]

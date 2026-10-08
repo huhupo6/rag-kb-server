@@ -163,3 +163,52 @@ class BannedEmail(models.Model):
         else:
             status = '已解封'
         return f'{self.email}（{status}）'
+
+# audit_logs 审计日志表
+class AuditLog(models.Model):
+    ACTION_CHOICES = [
+        ('assign_role', '委任角色'),
+        ('resign', '离职'),
+        ('invite', '邀请'),
+        ('ban', '平台封禁'),
+        ('unban', '平台解封'),
+        ('self_reset_password', '自助重置密码'),
+        ('cancel_tenant', '公司注销'),
+    ]
+
+    tenant = models.ForeignKey(
+        'Tenant',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        verbose_name='所属公司'
+    )
+    operator = models.ForeignKey(
+        'User',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='operated_logs',
+        verbose_name='操作者'
+    )
+    target_user = models.ForeignKey(
+        'User',
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name='targeted_logs',
+        verbose_name='被操作者'
+    )
+    action = models.CharField(
+        max_length=30,
+        choices=ACTION_CHOICES,
+        verbose_name='操作类型'
+    )
+    detail = models.TextField(blank=True, verbose_name='操作详情')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='操作时间')
+
+    class Meta:
+        db_table = 'audit_logs'
+        verbose_name = '审计日志'
+        verbose_name_plural = '审计日志'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.operator} {self.get_action_display()} {self.target_user}'

@@ -13,7 +13,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 # 4. 当前app自定义代码
-from .models import Tenant, User, BannedEmail
+from .models import Tenant, User, BannedEmail, AuditLog
 from .utils import redis_client, check_tenant_active
 
 # 企业注册 序列化器
@@ -242,3 +242,79 @@ class ActivateSerializer(serializers.Serializer):
             user.save()
 
             return user
+
+# 角色委任
+class AssignRoleSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField(label='目标用户ID')
+    target_role = serializers.ChoiceField(
+        choices=['admin', 'member'], label='目标角色'
+    )
+    target_role_type = serializers.ChoiceField(
+        choices=['hr', 'legal', ''], default='', required=False, label='管理员类型'
+    )
+
+    def validate(self, attrs):
+        # 拿到当前操作者
+        operator = self.context['request'].user
+
+        # 1. 只有董事长可以委任
+        if operator.role != 'owner':
+            raise serializers.ValidationError('只有董事长可以委任职位')
+
+        # 2. 查询目标用户是否为本公司
+        target = User.objects.filter(
+            id=attrs['user_id'],
+            tenant=operator.tenant,   # 天然隔离跨租户
+        ).first()
+        if not target:
+            raise serializers.ValidationError('用户不存在或不属于本公司')
+        
+        # 3. 不能委任自己
+        if target.id == operator.id:
+            raise serializers.ValidationError('不能委任自己')
+
+        # 4. 不能操作其他董事长
+        if target.role == 'owner':
+            raise serializers.ValidationError('董事长之间无法互相委任')
+
+        # 5. 只能委任在职用户
+        if target.status != 'active':
+            raise serializers.ValidationError('只能委任在职用户')
+
+        # 6. 目标角色与原角色相同，无需操作
+        if (target.role == attrs['target_role']
+                and target.role_type == attrs['target_role_type']):
+            raise serializers.ValidationError('该用户已是此角色')
+
+        # 7. 角色和 role_type 搭配校验
+        # 委任HR/法务时，必须指定 role_type；
+        if attrs['target_role'] == 'admin' and attrs['target_role_type'] not in ['hr', 'legal']:
+            raise serializers.ValidationError('委任为管理员时必须指定 HR 或法务')
+        # 委任员工时，role_type 必须为空
+        if attrs['target_role'] == 'member' and attrs['target_role_type'] != '':
+            raise serializers.ValidationError('委任为员工时 role_type 必须为空')
+
+        attrs['target'] = target
+        return attrs
+
+    def save(self, **kwargs):
+        target = self.validated_data['target']
+        operator = self.context['request'].user
+        old_role = target.role
+        old_role_type = target.role_type
+
+        with transaction.atomic():
+            target.role = self.validated_data['target_role']
+            target.role_type = self.validated_data['target_role_type']
+            target.save(update_fields=['role', 'role_type'])
+
+            AuditLog.objects.create(
+                tenant=operator.tenant,
+                operator=operator,
+                target_user=target,
+                action='assign_role',
+                detail=f'角色从 {old_role}/{old_role_type or "无"} '
+                       f'改为 {target.role}/{target.role_type or "无"}',
+            )
+
+        return target

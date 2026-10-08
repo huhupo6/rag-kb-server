@@ -11,10 +11,9 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
 # 4. 当前app自定义代码
-from .models import User, BannedEmail
+from .models import User, BannedEmail, Tenant, AuditLog
 from .utils import redis_client
-from .serializers import RegisterSerializer, LoginSerializer, InviteSerializer, ActivateSerializer
-
+from .serializers import RegisterSerializer, LoginSerializer, InviteSerializer, ActivateSerializer, AssignRoleSerializer
 # 发送验证码视图
 @api_view(['POST'])
 def send_verification_code(request):
@@ -136,4 +135,22 @@ def activate(request):
     if serializer.is_valid():
         serializer.save()
         return Response({'message': '激活成功，请前往登录'}, status=200)
+    return Response(serializer.errors, status=400)
+
+# 角色委任
+@api_view(['POST'])
+def assign_role(request):
+    serializer = AssignRoleSerializer(data=request.data, context={'request': request})
+    if serializer.is_valid():
+        target = serializer.save()
+        return Response({
+            'message': '委任成功',
+            'user': {
+                'id': target.id,
+                'email': target.email,
+                'full_name': target.full_name,
+                'role': target.role,
+                'role_type': target.role_type,
+            }
+        }, status=200)
     return Response(serializer.errors, status=400)

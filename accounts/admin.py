@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
-from .models import Tenant, User, BannedEmail
+from .models import Tenant, User, BannedEmail, AuditLog
 
 # 封禁用户：把他们的邮箱加入 BannedEmail 平台黑名单
 @admin.action(description='封禁选中用户（加入平台黑名单）')
@@ -32,13 +32,34 @@ def unban_emails(modeladmin, request, queryset):
     else:
         modeladmin.message_user(request, '选中的记录中没有生效中的封禁')
 
+# 审计日志表
+@admin.register(AuditLog)
+class AuditLogAdmin(admin.ModelAdmin):
+    list_display = ('id', 'tenant', 'operator', 'target_user', 'action', 'created_at')
+    list_filter = ('action', 'tenant')
+    search_fields = ('operator__email', 'target_user__email', 'detail')
+    readonly_fields = ('tenant', 'operator', 'target_user', 'action', 'detail', 'created_at')
+    
+    # 审计日志不允许手动新增
+    def has_add_permission(self, request):
+        return False
 
+    # 审计日志不允许修改
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    # 审计日志不允许删除
+    def has_delete_permission(self, request, obj=None):
+        return False
+    
+# 租户表
 @admin.register(Tenant)
 class TenantAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'status', 'created_at')
     list_filter = ('status',)
     search_fields = ('name',)
-    
+
+# 用户表
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
     # 后台展示字段
@@ -64,6 +85,7 @@ class UserAdmin(admin.ModelAdmin):
     display_banned.boolean = True
     display_banned.short_description = '已封禁'
 
+# 封禁邮箱表
 @admin.register(BannedEmail)
 class BannedEmailAdmin(admin.ModelAdmin):
     list_display = ('id', 'email', 'is_active', 'banned_at', 'unbanned_at')
