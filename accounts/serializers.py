@@ -164,29 +164,26 @@ class InviteSerializer(serializers.Serializer):
 
         # 生成激活令牌，24 小时有效
         token = secrets.token_urlsafe(32)
+        
+        with transaction.atomic():
+            user = User.objects.create(
+                tenant=request_user.tenant,
+                email=validated_data['email'],
+                full_name=validated_data['full_name'],
+                password='',
+                role=validated_data['role'],
+                role_type=validated_data['role_type'],
+                status='pending',
+                activation_token=token,
+                activation_token_expires_at=timezone.now() + timedelta(hours=24),
+            )
 
-        user = User.objects.create(
-            tenant=request_user.tenant,
-            email=validated_data['email'],
-            full_name=validated_data['full_name'],
-            password='',
-            role=validated_data['role'],
-            role_type=validated_data['role_type'],
-            status='pending',
-            activation_token=token,
-            activation_token_expires_at=timezone.now() + timedelta(hours=24),
-        )
-
-        # 发送邀请邮件
-        send_mail(
-            subject='【知识库系统】您已被邀请加入',
-            message=f'{request_user.full_name} 邀请您加入 {request_user.tenant.name}，'
-                    f'请点击链接激活账号并设置密码：\n'
-                    f'http://localhost:5173/activate?token={token}',  # 地址需要指向前端页面
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[user.email],
-            fail_silently=False,
-        )
+        transaction.on_commit(lambda: send_invite_email.delay(
+            email=user.email,
+            inviter_name=request_user.full_name,
+            company_name=request_user.tenant.name,
+            token=token,
+        ))
 
         return user
 
@@ -243,7 +240,7 @@ class ActivateSerializer(serializers.Serializer):
 
             return user
 
-# 角色委任
+# 角色委任 序列化器
 class AssignRoleSerializer(serializers.Serializer):
     user_id = serializers.IntegerField(label='目标用户ID')
     target_role = serializers.ChoiceField(
@@ -317,4 +314,131 @@ class AssignRoleSerializer(serializers.Serializer):
                        f'改为 {target.role}/{target.role_type or "无"}',
             )
 
+            # 事务提交后发邮件
+            transaction.on_commit(lambda: send_assign_role_email.delay(
+                email=target.email,
+                full_name=target.full_name,
+                old_role=old_role,
+                new_role=target.get_role_display(),
+                company_name=operator.tenant.name,
+            ))
+
         return target
+
+# 员工离职 序列化器
+class ResignUserSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField(label='目标用户ID')
+    
+    def validate(self, attrs):
+        operator = self.context['request'].user
+
+        # 1. 只能操作本公司人员
+        target = User.objects.filter(
+            id=attrs['user_id'],
+            tenant=operator.tenant,
+        ).first()
+        if not target:
+            raise serializers.ValidationError('用户不存在或不属于本公司')
+
+        # 2. 禁止操作自己
+        if target.id == operator.id:
+            raise serializers.ValidationError('不能操作自己')
+
+        # 3. 判断操作者身份：董事长 或者 HR
+        is_owner = operator.role == 'owner'
+        is_hr = operator.role == 'admin' and operator.role_type == 'hr'
+        if not (is_owner or is_hr):
+            raise serializers.ValidationError('您没有权限操作')
+
+        # 4. HR只能操作员工，不能操作董事长、管理员
+        if is_hr and target.role != 'member':
+            raise serializers.ValidationError('HR 只能操作普通员工')
+
+        # 5. 董事长不能离职其他董事长
+        if is_owner and target.role == 'owner':
+            raise serializers.ValidationError('董事长之间无法互相操作')
+
+        # 6. 只能操作在职用户
+        if target.status != 'active':
+            raise serializers.ValidationError('只能操作在职用户')
+        
+        attrs['target'] = target
+        return attrs
+
+    def save(self, **kwargs):
+        target = self.validated_data['target']
+        # 获取操作人
+        operator = self.context['request'].user
+
+        with transaction.atomic():
+            old_email = target.email
+            timestamp = timezone.now().strftime('%Y%m%d%H%M%S')
+            target.email = f'{target.email}_resigned_{timestamp}'
+
+            target.status = 'resigned'
+            target.save(update_fields=['email', 'status'])
+
+            AuditLog.objects.create(
+                tenant=operator.tenant,
+                operator=operator,
+                target_user=target,
+                action='resign',
+                detail=f'{target.full_name}（{target.get_role_display()}）离职，原邮箱 {old_email}',
+            )
+        return target
+
+# 董事离职 序列化器
+class SelfResignSerializer(serializers.Serializer):
+    def validate(self, attrs):
+        user = self.context['request'].user
+
+        # 1. 必须是董事长
+        if user.role != 'owner':
+            raise serializers.ValidationError('仅限董事使用')
+
+        # 2. 必须是在职状态
+        if user.status != 'active':
+            raise serializers.ValidationError('账号状态异常，无法离职')
+
+        # 3. 是否还有其他在职董事
+        other_owners = User.objects.filter(
+            tenant=user.tenant,
+            role='owner',
+            status='active',
+        ).exclude(id=user.id)
+
+        if not other_owners.exists():
+            raise serializers.ValidationError(
+                '公司至少需要保留一位董事，请先委任新董事'
+            )
+
+        return attrs
+
+    def save(self, **kwargs):
+        user = self.context['request'].user
+
+        with transaction.atomic():
+            # 锁住租户行，保证同一租户的董事正常离职
+            Tenant.objects.select_for_update().get(id=user.tenant_id)
+            
+            # 1. 释放董事邮箱
+            old_email = user.email
+            timestamp = timezone.now().strftime('%Y%m%d%H%M%S')
+            user.email = f'{user.email}_resigned_{timestamp}'
+
+            # 2. 改董事状态
+            user.status = 'resigned'
+            user.save(update_fields=['email', 'status'])
+
+            # 3. 写审计日志
+            AuditLog.objects.create(
+                tenant=user.tenant,
+                operator=user,
+                target_user=user,
+                action='resign',
+                detail=f'董事 {user.full_name} 主动离职，原邮箱 {old_email}',
+            )
+        return user
+    
+# 董事注销公司 序列化器
+# 用户自助找回密码 序列化器

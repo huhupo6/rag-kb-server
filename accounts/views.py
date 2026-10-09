@@ -13,7 +13,15 @@ from rest_framework_simplejwt.tokens import RefreshToken
 # 4. 当前app自定义代码
 from .models import User, BannedEmail, Tenant, AuditLog
 from .utils import redis_client
-from .serializers import RegisterSerializer, LoginSerializer, InviteSerializer, ActivateSerializer, AssignRoleSerializer
+from .serializers import (
+    RegisterSerializer,
+    LoginSerializer,
+    InviteSerializer,
+    ActivateSerializer,
+    AssignRoleSerializer,
+    ResignUserSerializer,
+    SelfResignSerializer,
+)
 # 发送验证码视图
 @api_view(['POST'])
 def send_verification_code(request):
@@ -154,3 +162,38 @@ def assign_role(request):
             }
         }, status=200)
     return Response(serializer.errors, status=400)
+
+# 员工离职
+@api_view(['POST'])
+def resign_user(request):
+    serializer = ResignUserSerializer(data=request.data, context={'request': request})
+    if serializer.is_valid():
+        target = serializer.save()
+        return Response({
+            'message': '离职处理成功，邮箱已释放',
+            'user': {
+                'id': target.id,
+                'full_name': target.full_name,
+                'status': target.status,
+            }
+        }, status=200)
+    return Response(serializer.errors, status=400)
+
+# 董事离职
+@api_view(['POST'])
+def self_resign(request):
+    serializer = SelfResignSerializer(data=request.data, context={'request': request})
+    if serializer.is_valid():
+        user = serializer.save()
+        return Response({
+            'message': '离职成功，感谢您的付出',
+            'user': {
+                'id': user.id,
+                'full_name': user.full_name,
+                'status': user.status,
+            }
+        }, status=200)
+    return Response(serializer.errors, status=400)
+
+# 董事注销公司
+# 用户自助找回密码

@@ -134,7 +134,7 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.AllowAny',  # 默认允许，具体接口再单独控制
+        'rest_framework.permissions.AllowAny',
     ),
 }
 

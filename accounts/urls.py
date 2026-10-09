@@ -16,4 +16,8 @@ urlpatterns = [
     path('activate/', views.activate, name='activate'),
     # 角色委任
     path('assign-role/', views.assign_role, name='assign_role'),
+    # 员工离职
+    path('resign/', views.resign_user, name='resign'),
+    # 董事离职
+    path('me/resign/', views.self_resign, name='self_resign'),
 ]
