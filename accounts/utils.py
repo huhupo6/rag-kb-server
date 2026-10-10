@@ -1,5 +1,6 @@
 import redis
 from django.conf import settings
+from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
 
 # 全局 Redis 客户端
@@ -10,11 +11,7 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
-'''
-校验用户所属租户是否处于正常状态。
-被封禁/暂停/注销的租户下，所有业务操作都应该被拦截。
-可在视图入口统一调用。
-'''
+# 校验用户所属租户是否处于正常状态。
 def check_tenant_active(user):
     if user.tenant and user.tenant.status != 'active':
         status_messages = {
@@ -25,3 +22,14 @@ def check_tenant_active(user):
         raise PermissionDenied(
             status_messages.get(user.tenant.status, '所属公司状态异常，请联系平台客服')
         )
+
+# 把待激活用户标记为 邀请过期，释放邮箱，清空令牌
+def expire_pending_user(user):
+    timestamp = timezone.now().strftime('%Y%m%d%H%M%S')
+    user.email = f'{user.email}_expired_{timestamp}'
+    user.status = 'expired'
+    user.activation_token = ''
+    user.activation_token_expires_at = None
+    user.save(update_fields=[
+        'email', 'status', 'activation_token', 'activation_token_expires_at'
+    ])

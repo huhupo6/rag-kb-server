@@ -21,6 +21,9 @@ from .serializers import (
     AssignRoleSerializer,
     ResignUserSerializer,
     SelfResignSerializer,
+    CancelTenantSerializer,
+    ForgotPasswordSerializer,
+    ResetPasswordSerializer,
 )
 # 发送验证码视图
 @api_view(['POST'])
@@ -196,4 +199,35 @@ def self_resign(request):
     return Response(serializer.errors, status=400)
 
 # 董事注销公司
-# 用户自助找回密码
+@api_view(['POST'])
+def cancel_tenant(request):
+    serializer = CancelTenantSerializer(data=request.data, context={'request': request})
+    if serializer.is_valid():
+        tenant = serializer.save()
+        return Response({
+            'message': '公司已注销，感谢您的使用',
+            'tenant': {
+                'id': tenant.id,
+                'name': tenant.name,
+                'status': tenant.status,
+            }
+        }, status=200)
+    return Response(serializer.errors, status=400)
+
+# 忘记密码 -> 发送验证码
+@api_view(['POST'])
+def forgot_password(request):
+    serializer = ForgotPasswordSerializer(data=request.data)
+    if serializer.is_valid():
+        serializer.save()
+        return Response({'message': '验证码已发送，请查收'})
+    return Response(serializer.errors, status=400)
+
+# 忘记密码 -> 重置密码
+@api_view(['POST'])
+def reset_password(request):
+    serializer = ResetPasswordSerializer(data=request.data)
+    if serializer.is_valid():
+        serializer.save()
+        return Response({'message': '密码重置成功，请用新密码登录'}, status=200)
+    return Response(serializer.errors, status=400)

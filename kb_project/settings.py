@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import timedelta
+from celery.schedules import crontab
 
 # 加载.env文件中的环境变量
 load_dotenv()
@@ -127,6 +128,14 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Asia/Shanghai'
+
+# Celery Beat 定时任务配置
+CELERY_BEAT_SCHEDULE = {
+    'clean-expired-invitations': {
+        'task': 'accounts.tasks.clean_expired_invitations',
+        'schedule': crontab(hour=2, minute=0),   # 每天凌晨 2 点执行
+    },
+}
 
 # JWT 配置
 REST_FRAMEWORK = {

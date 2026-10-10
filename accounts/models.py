@@ -1,4 +1,10 @@
 from django.db import models
+from django.contrib.auth.base_user import BaseUserManager
+from django.contrib.auth.hashers import check_password as django_check_password
+
+class UserManager(BaseUserManager):
+    def get_by_natural_key(self, username):
+        return self.get(**{self.model.USERNAME_FIELD: username})
 
 # tenants 租户表
 class Tenant(models.Model):
@@ -103,9 +109,40 @@ class User(models.Model):
     # 激活时间
     activated_at = models.DateTimeField(null=True, blank=True, verbose_name='激活时间')
 
+    # 绑定自定义 Manager
+    objects = UserManager()
+
     # Django 认证系统需要的类属性
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
+
+    def check_password(self, raw_password):
+        return django_check_password(raw_password, self.password)
+
+    def set_password(self, raw_password):
+        from django.contrib.auth.hashers import make_password
+        self.password = make_password(raw_password)
+
+    def get_username(self):
+        return self.email
+    
+    def get_full_name(self):
+        return self.full_name
+    
+    def get_short_name(self):
+        return self.full_name
+
+    # 平台管理员拥有全部权限
+    def has_perm(self, perm, obj=None):
+        if self.is_superuser:
+            return True
+        return False
+
+    # 平台管理员可以访问所有模块
+    def has_module_perms(self, app_label):
+        if self.is_superuser:
+            return True
+        return False
 
     # 实时查询 BannedEmail 表，判断当前邮箱是否被封禁
     @property
@@ -127,14 +164,13 @@ class User(models.Model):
     def is_authenticated(self):
         return True
 
-    def get_username(self):
-        return self.email
+    @property
+    def is_staff(self):
+        return self.role == 'owner' and self.tenant is None
 
-    def has_perm(self, perm, obj=None):
-        return False
-
-    def has_module_perms(self, app_label):
-        return False
+    @property
+    def is_superuser(self):
+        return self.is_staff
 
     class Meta:
         db_table = 'users'
