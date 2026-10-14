@@ -210,6 +210,7 @@ class AuditLog(models.Model):
         ('unban', '平台解封'),
         ('self_reset_password', '自助重置密码'),
         ('cancel_tenant', '公司注销'),
+        ('delete_document', '删除文档链'),
     ]
 
     tenant = models.ForeignKey(
