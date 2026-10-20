@@ -41,6 +41,7 @@ AUTH_USER_MODEL = 'accounts.User'
 
 # 中间件
 MIDDLEWARE = [
+    "queryguard.middleware.QueryGuardMiddleware",
     'corsheaders.middleware.CorsMiddleware',                    # 前后端跨域请求
     'django.middleware.security.SecurityMiddleware',            # 添加安全响应头
     'django.contrib.sessions.middleware.SessionMiddleware',     # 管理session会话
@@ -174,3 +175,16 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
 # 前端跨域访问后端
 CORS_ALLOW_ALL_ORIGINS = True
 # CORS_ALLOWED_ORIGINS = []
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {
+        "queryguard": {
+            "handlers": ["console"],
+            "level": "DEBUG",
+            "propagate": False,
+        },
+    },
+}

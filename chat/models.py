@@ -25,5 +25,12 @@ class ChatHistory(models.Model):
         verbose_name_plural = '问答历史'
         ordering = ['-created_at']
 
+        indexes = [
+            # HR、董事查询全公司日志索引
+            models.Index(fields=['tenant', 'created_at'], name='chat_logs_idx'),
+            # 个人历史专用的联合索引
+            models.Index(fields=['user', 'created_at'], name='my_history_idx'),
+        ]
+
     def __str__(self):
         return f'{self.user.full_name if self.user else "未知"} - {self.question[:20]}'

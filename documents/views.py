@@ -4,6 +4,7 @@ from accounts.utils import check_tenant_active
 from .serializers import DocumentUploadSerializer, DocumentNewVersionSerializer
 from .models import Document
 from django.db import transaction
+from django.db.models import Q
 
 # 上传新文档 接口
 @api_view(['POST'])
@@ -44,7 +45,7 @@ def list_documents(request):
         tenant=request.user.tenant,
         is_current=True,
         is_deleted=False,
-    ).order_by('-uploaded_at')
+    ).select_related('uploaded_by').order_by('-uploaded_at')
 
     data = [{
         'id': doc.id,
@@ -129,11 +130,23 @@ def document_versions(request, doc_id):
     root_id = doc.parent_doc_id or doc.id
 
     # 4. 查同一版本链的所有版本
-    versions = Document.objects.filter(
+    chain_versions = Document.objects.filter(
         tenant=request.user.tenant,
         parent_doc_id=root_id,
         is_deleted=False,
-    ).select_related('uploaded_by').order_by('-version')
+    ).select_related('uploaded_by')
+
+    root_version = Document.objects.filter(
+        id=root_id,
+        tenant=request.user.tenant,
+        is_deleted=False,
+    ).select_related('uploaded_by')
+
+    versions = sorted(
+        list(chain_versions) + list(root_version), 
+        key=lambda x: x.version, 
+        reverse=True
+    )
 
     data = [{
         'id': v.id,

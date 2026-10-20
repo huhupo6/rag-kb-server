@@ -49,7 +49,8 @@ class Document(models.Model):
         verbose_name_plural = '文档'
         ordering = ['-uploaded_at']
         indexes = [
-            models.Index(fields=['tenant', 'is_current', 'is_deleted']),
+            models.Index(fields=['tenant', 'is_current', 'is_deleted', 'uploaded_at'],name='doc_list_idx'),
+            models.Index(fields=['tenant', 'parent_doc_id', 'is_deleted', 'version'], name='doc_version_idx'),
         ]
 
         def __str__(self):
