@@ -11,9 +11,10 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
 # 4. 当前app自定义代码
-from .models import User, BannedEmail, Tenant, AuditLog
+from .models import User, BannedEmail
 from .utils import redis_client
 from .serializers import (
+    SendCodeSerializer,
     RegisterSerializer,
     LoginSerializer,
     InviteSerializer,
@@ -25,11 +26,15 @@ from .serializers import (
     ForgotPasswordSerializer,
     ResetPasswordSerializer,
 )
-# 发送验证码视图
+
+# 企业注册-发送验证码 接口
 @api_view(['POST'])
 def send_verification_code(request):
-    email = request.data.get('email', '').strip()
-
+    serializer = SendCodeSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=400)
+    email = serializer.validated_data['email']
+    
     # 1. 校验邮箱是否填写
     if not email:
         return Response({'error': '请输入邮箱'}, status=400)
@@ -67,13 +72,16 @@ def send_verification_code(request):
 
     return Response({'message': '验证码已发送，请查收邮箱'})
 
-# 企业注册视图
+# 企业注册 接口
 @api_view(['POST'])
 def register(request):
     serializer = RegisterSerializer(data=request.data)
 
     if serializer.is_valid():
         user = serializer.save()
+        
+        # 预加载tenant
+        user = User.objects.select_related("tenant").get(pk=user.pk)
 
         # 注册后，JWT签发
         refresh = RefreshToken.for_user(user)
@@ -94,14 +102,21 @@ def register(request):
     # 校验失败，返回错误信息
     return Response(serializer.errors, status=400)
 
-# 统一登录接口视图
+# 统一登录 接口
 @api_view(['POST'])
 def login(request):
     serializer = LoginSerializer(data=request.data)
 
     if serializer.is_valid():
         user = serializer.validated_data['user']
+
         refresh = RefreshToken.for_user(user)
+        refresh['pwd_fp'] = user.password[-8:]
+        refresh.access_token['pwd_fp'] = user.password[-8:]
+        refresh['role'] = user.role
+        refresh.access_token['role'] = user.role
+        refresh['role_type'] = user.role_type
+        refresh.access_token['role_type'] = user.role_type
 
         return Response({
             'message': '登录成功',
@@ -121,9 +136,13 @@ def login(request):
     # 校验失败，返回错误信息
     return Response(serializer.errors, status=400)
 
-# 董事邀请员工、HR、法务 / HR邀请员工 视图
+# 董事邀请员工、HR、法务 / HR邀请员工 接口
 @api_view(['POST'])
 def invite(request):
+    request_user = User.objects.select_related("tenant").get(pk=request.user.pk)
+    
+    request.user = request_user
+
     serializer = InviteSerializer(data=request.data, context={'request': request})
     if serializer.is_valid():
         user = serializer.save()
@@ -139,7 +158,7 @@ def invite(request):
         }, status=201)
     return Response(serializer.errors, status=400)
 
-# 激活账号 视图
+# 激活账号 接口
 @api_view(['POST'])
 def activate(request):
     serializer = ActivateSerializer(data=request.data)
@@ -148,7 +167,7 @@ def activate(request):
         return Response({'message': '激活成功，请前往登录'}, status=200)
     return Response(serializer.errors, status=400)
 
-# 角色委任
+# 角色委任 接口
 @api_view(['POST'])
 def assign_role(request):
     serializer = AssignRoleSerializer(data=request.data, context={'request': request})
@@ -166,7 +185,7 @@ def assign_role(request):
         }, status=200)
     return Response(serializer.errors, status=400)
 
-# 员工离职
+# 员工离职 接口
 @api_view(['POST'])
 def resign_user(request):
     serializer = ResignUserSerializer(data=request.data, context={'request': request})
@@ -182,7 +201,7 @@ def resign_user(request):
         }, status=200)
     return Response(serializer.errors, status=400)
 
-# 董事离职
+# 董事离职 接口
 @api_view(['POST'])
 def self_resign(request):
     serializer = SelfResignSerializer(data=request.data, context={'request': request})
@@ -198,7 +217,7 @@ def self_resign(request):
         }, status=200)
     return Response(serializer.errors, status=400)
 
-# 董事注销公司
+# 董事注销公司 接口
 @api_view(['POST'])
 def cancel_tenant(request):
     serializer = CancelTenantSerializer(data=request.data, context={'request': request})
@@ -214,7 +233,7 @@ def cancel_tenant(request):
         }, status=200)
     return Response(serializer.errors, status=400)
 
-# 忘记密码 -> 发送验证码
+# 用户忘记密码-发送验证码 接口
 @api_view(['POST'])
 def forgot_password(request):
     serializer = ForgotPasswordSerializer(data=request.data)
@@ -223,7 +242,7 @@ def forgot_password(request):
         return Response({'message': '验证码已发送，请查收'})
     return Response(serializer.errors, status=400)
 
-# 忘记密码 -> 重置密码
+# 用户忘记密码-重置密码 接口
 @api_view(['POST'])
 def reset_password(request):
     serializer = ResetPasswordSerializer(data=request.data)

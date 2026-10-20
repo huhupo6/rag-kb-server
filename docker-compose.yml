@@ -1,0 +1,78 @@
+services:
+  # 1. MySQL 数据库
+  db:
+    image: mysql:8.0
+    container_name: kb_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: kb_db
+      TZ: Asia/Shanghai
+    command: 
+      --character-set-server=utf8mb4 
+      --collation-server=utf8mb4_unicode_ci 
+      --innodb_ft_min_token_size=1
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  # 2. Redis 缓存与消息队列
+  redis:
+    image: redis:7.0-alpine
+    container_name: kb_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  # 3. Django Web 服务
+  web:
+    build: .
+    container_name: kb_web
+    restart: always
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
+      - media_data:/app/media
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  # 4. Celery Worker (处理异步任务)
+  celery_worker:
+    build: .
+    container_name: kb_celery_worker
+    restart: always
+    command: celery -A kb_project worker -l info --pool=solo
+    volumes:
+      - .:/app
+      - media_data:/app/media
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+  # 5. Celery Beat (处理定时任务)
+  celery_beat:
+    build: .
+    container_name: kb_celery_beat
+    restart: always
+    command: celery -A kb_project beat -l info
+    volumes:
+      - .:/app
+      - media_data:/app/media
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+
+# 数据卷，防止容器删了数据丢失
+volumes:
+  mysql_data:
+  media_data:

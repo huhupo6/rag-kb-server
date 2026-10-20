@@ -22,7 +22,7 @@ def parse_document(doc_id):
         full_path = os.path.join(settings.MEDIA_ROOT, doc.file_path)
         
         # 抽文本
-        text = extract_text(doc.file_path)
+        text = extract_text(full_path)
 
         # 分块
         chunks = split_into_chunks(text)

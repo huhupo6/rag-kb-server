@@ -5,7 +5,7 @@ from .serializers import DocumentUploadSerializer, DocumentNewVersionSerializer
 from .models import Document
 from django.db import transaction
 
-# 上传新文档
+# 上传新文档 接口
 @api_view(['POST'])
 def upload_document(request):
     
@@ -34,7 +34,7 @@ def upload_document(request):
         }, status=201)
     return Response(serializer.errors, status=400)
 
-# 文档查询
+# 文档查询 接口
 @api_view(['GET'])
 def list_documents(request):
     # 租户状态检验
@@ -65,7 +65,7 @@ def list_documents(request):
         'documents': data,
     }, status=200)
 
-# 新版本的上传
+# 文档新版本上传 接口
 @api_view(['POST'])
 def upload_new_version(request, doc_id):
     
@@ -108,7 +108,7 @@ def upload_new_version(request, doc_id):
         }, status=201)
     return Response(serializer.errors, status=400)
 
-# 文档历史版本查询
+# 文档历史版本查询 接口
 @api_view(['GET'])
 def document_versions(request, doc_id):
 
@@ -154,7 +154,7 @@ def document_versions(request, doc_id):
         'versions': data,
     }, status=200)
 
-# 软删除文档链
+# 软删除文档链 接口
 @api_view(['DELETE'])
 def delete_document(request, doc_id):
     from accounts.models import AuditLog

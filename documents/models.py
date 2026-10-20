@@ -48,6 +48,9 @@ class Document(models.Model):
         verbose_name = '文档'
         verbose_name_plural = '文档'
         ordering = ['-uploaded_at']
+        indexes = [
+            models.Index(fields=['tenant', 'is_current', 'is_deleted']),
+        ]
 
         def __str__(self):
             return f'{self.file_name}（V{self.version}）'

@@ -1,9 +1,23 @@
 from django.contrib import admin
+from django.contrib.auth.models import Group
 from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from .models import Tenant, User, BannedEmail, AuditLog
 
-# 封禁用户
+admin.site.unregister(Group)
+
+# 平台封禁邮箱表 解封用户
+@admin.action(description='解封选中邮箱')
+def unban_emails(modeladmin, request, queryset):
+    active_qs = queryset.filter(is_active=True)
+    emails = list(active_qs.values_list('email', flat=True))
+    count = active_qs.update(is_active=False, unbanned_at=timezone.now())
+    if count:
+        modeladmin.message_user(request, f'已解封 {count} 个邮箱：{", ".join(emails)}')
+    else:
+        modeladmin.message_user(request, '选中的记录中没有生效中的封禁')
+
+# 用户表 封禁用户
 @admin.action(description='封禁选中用户（加入平台黑名单）')
 def ban_users(modeladmin, request, queryset):
     add_count = 0
@@ -20,18 +34,7 @@ def ban_users(modeladmin, request, queryset):
             add_count += 1
     modeladmin.message_user(request, f'操作完成，本次新增 {add_count} 条黑名单记录')
 
-# 解封用户
-@admin.action(description='解封选中邮箱')
-def unban_emails(modeladmin, request, queryset):
-    active_qs = queryset.filter(is_active=True)
-    emails = list(active_qs.values_list('email', flat=True))
-    count = active_qs.update(is_active=False, unbanned_at=timezone.now())
-    if count:
-        modeladmin.message_user(request, f'已解封 {count} 个邮箱：{", ".join(emails)}')
-    else:
-        modeladmin.message_user(request, '选中的记录中没有生效中的封禁')
-
-# 用户表的解封
+# 用户表 解封用户
 @admin.action(description='解封选中用户（从平台黑名单移除）')
 def unban_users(modeladmin, request, queryset):
     count = 0
@@ -47,12 +50,32 @@ def unban_users(modeladmin, request, queryset):
     else:
         modeladmin.message_user(request, '选中的用户中没有处于封禁状态的')
 
+# 租户表 封禁租户
+@admin.action(description='封禁选中租户（全员无法登录）')
+def ban_tenants(modeladmin, request, queryset):
+    count = queryset.update(status='banned')
+    modeladmin.message_user(request, f'已成功封禁 {count} 个企业，该企业所有员工将无法登录。')
+
+# 租户表 暂停用户
+@admin.action(description='暂停选中租户（欠费/违规警告）')
+def suspend_tenants(modeladmin, request, queryset):
+    count = queryset.update(status='suspended')
+    modeladmin.message_user(request, f'已成功暂停 {count} 个企业服务。')
+
+# 租户表 恢复使用
+@admin.action(description='恢复选中租户（恢复正常使用）')
+def activate_tenants(modeladmin, request, queryset):
+    count = queryset.update(status='active')
+    modeladmin.message_user(request, f'已成功恢复 {count} 个企业。')
+
 # 租户表
 @admin.register(Tenant)
 class TenantAdmin(admin.ModelAdmin):
     list_display = ('id', 'name', 'status', 'created_at')
     list_filter = ('status',)
     search_fields = ('name',)
+
+    actions = [ban_tenants, suspend_tenants, activate_tenants]
 
     def has_delete_permission(self, request, obj=None):
         return False

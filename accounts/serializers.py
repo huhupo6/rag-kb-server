@@ -18,6 +18,10 @@ from .models import Tenant, User, BannedEmail, AuditLog
 from .utils import redis_client, check_tenant_active, expire_pending_user
 from .tasks import send_invite_email, send_invite_email, send_tenant_cancel_email, send_assign_role_email
 
+# 企业注册-发送验证码 序列化器
+class SendCodeSerializer(serializers.Serializer):
+    email = serializers.EmailField(label="邮箱")
+
 # 企业注册 序列化器
 class RegisterSerializer(serializers.Serializer):
     company_name = serializers.CharField(max_length=100, label='公司名称')
@@ -28,21 +32,23 @@ class RegisterSerializer(serializers.Serializer):
     code = serializers.CharField(max_length=6, label='验证码')
 
     def validate_email(self, value):
-        # 检查邮箱是否被平台封禁
+
+        # 1. 检查邮箱是否被平台封禁
         if BannedEmail.objects.filter(email=value, is_active=True).exists():
             raise serializers.ValidationError('该邮箱已被封禁，无法注册')
 
-        # 检验邮箱是否未被注册
+        # 2. 检验邮箱是否未被注册
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError('该邮箱已被注册')
         return value
 
     def validate(self, attrs):
-        # 检验二次密码是否一致
+
+        # 3. 检验二次密码是否一致
         if attrs['password'] != attrs['confirm_password']:
             raise serializers.ValidationError('两次输入的密码不一致')
 
-        # 校验验证码
+        # 4. 校验验证码
         email = attrs['email']
         code = attrs['code']
         saved_code = redis_client.get(f'reg_code:{email}')
@@ -86,7 +92,7 @@ class LoginSerializer(serializers.Serializer):
         password = attrs['password']
 
         # 1. 根据邮箱查用户
-        user = User.objects.filter(email=email).first()
+        user = User.objects.select_related("tenant").filter(email=email).first()
         if not user:
             raise serializers.ValidationError('邮箱或密码错误')
 
@@ -164,6 +170,8 @@ class InviteSerializer(serializers.Serializer):
     def create(self, validated_data):
         request_user = self.context['request'].user
 
+        company_name = request_user.tenant.name
+
         # 生成激活令牌，24 小时有效
         token = secrets.token_urlsafe(32)
         
@@ -184,7 +192,7 @@ class InviteSerializer(serializers.Serializer):
         transaction.on_commit(lambda: send_invite_email.delay(
             email=user.email,
             inviter_name=request_user.full_name,
-            company_name=request_user.tenant.name,
+            company_name=company_name,
             token=token,
         ))
 
@@ -197,50 +205,74 @@ class ActivateSerializer(serializers.Serializer):
     confirm_password = serializers.CharField(min_length=6, write_only=True)
 
     def validate(self, attrs):
-        # 校验两次密码是否一致
+        token = attrs["token"]
+        # 1. Redis黑名单前置拦截
+        if redis_client.exists(f"activate_black:{token}"):
+            raise serializers.ValidationError("该激活链接已使用或失效")
+
+        # 2. 校验两次密码是否一致
         if attrs['password'] != attrs['confirm_password']:
             raise serializers.ValidationError('两次输入的密码不一致')
+
+        # 预查询用户
+        user = User.objects.select_related("tenant").filter(activation_token=token).first()
+
+        # 3. 判断激活码是否有效
+        if not user:
+            raise serializers.ValidationError('无效的激活链接')
+
+        # 4. 判断账号是否被封禁
+        if user.is_banned:
+            raise serializers.ValidationError('账号已被平台封禁，请联系平台客服')
+
+        # 5. 判断所属公司是否被停用
+        if user.tenant and user.tenant.status != 'active':
+            raise serializers.ValidationError('所属公司已被平台停用')
+
+        # 6. 判断账号状态是否处于待激活状态
+        if user.status != 'pending':
+            raise serializers.ValidationError('该账号已激活或链接已失效')
+
+        # 7. 判断激活码是否过期
+        now = timezone.now()
+        if user.activation_token_expires_at < now:
+            with transaction.atomic():
+                expire_pending_user(user)
+            redis_client.setex(f"activate_black:{token}", 300, "expired")
+            raise serializers.ValidationError("激活链接已过期，请联系管理员重新邀请")
+        
+        attrs["user"] = user
         return attrs
 
     def create(self, validated_data):
-
+        user = validated_data["user"]
+        token = validated_data["token"]
         with transaction.atomic():
             # 加行锁，防止一个邀请码被两个人同时激活，导致数据异常
-            user = User.objects.select_for_update().filter(
+            locked_user = User.objects.select_for_update().select_related("tenant").filter(
+                id=user.id,
                 activation_token=validated_data['token']
             ).first()
 
-            # 判断激活码是否有效
-            if not user:
-                raise serializers.ValidationError('无效的激活链接')
-
-            # 判断账号是否被封禁
-            if user.is_banned:
-                raise serializers.ValidationError('账号已被平台封禁，请联系平台客服')
-
-            # 判断所属公司是否被停用
-            if user.tenant and user.tenant.status != 'active':
-                raise serializers.ValidationError('所属公司已被平台停用')
-
-
-            # 判断账号状态是否处于待激活状态
-            if user.status != 'pending':
-                raise serializers.ValidationError('该账号已激活或链接已失效')
-
-            # 判断激活码是否过期
-            if user.activation_token_expires_at < timezone.now():
-                expire_pending_user(user)
-                raise serializers.ValidationError('激活链接已过期，请联系管理员重新邀请')
+            if not locked_user or locked_user.status != "pending" or locked_user.activation_token_expires_at < timezone.now():
+                raise serializers.ValidationError("激活链接已失效，请重新获取邀请")
             
             # 数据库更新：设置密码、激活账号、清空激活码
-            user.password = make_password(validated_data['password'])
-            user.status = 'active'
-            user.activated_at = timezone.now()
-            user.activation_token = ''
-            user.activation_token_expires_at = None
-            user.save()
-
-            return user
+            locked_user.password = make_password(validated_data['password'])
+            locked_user.status = 'active'
+            locked_user.activated_at = timezone.now()
+            locked_user.activation_token = ''
+            locked_user.activation_token_expires_at = None
+            locked_user.save(update_fields=[
+                "password",
+                "status",
+                "activated_at",
+                "activation_token",
+                "activation_token_expires_at"
+            ])
+            
+        redis_client.setex(f"activate_black:{token}", 300, "used")
+        return locked_user
 
 # 角色委任 序列化器
 class AssignRoleSerializer(serializers.Serializer):
@@ -263,7 +295,7 @@ class AssignRoleSerializer(serializers.Serializer):
         # 2. 查询目标用户是否为本公司
         target = User.objects.filter(
             id=attrs['user_id'],
-            tenant=operator.tenant,   # 天然隔离跨租户
+            tenant=operator.tenant,
         ).first()
         if not target:
             raise serializers.ValidationError('用户不存在或不属于本公司')
@@ -303,10 +335,21 @@ class AssignRoleSerializer(serializers.Serializer):
         old_role_type = target.role_type
 
         with transaction.atomic():
-            target.role = self.validated_data['target_role']
-            target.role_type = self.validated_data['target_role_type']
-            target.save(update_fields=['role', 'role_type'])
+            # 加行锁
+            locked_target = User.objects.select_for_update().filter(
+                id=target.id,
+                tenant=operator.tenant
+            ).first()
 
+            if not locked_target or locked_target.status != "active" or locked_target.role == "owner":
+                raise serializers.ValidationError("用户状态发生变更，操作失败")
+
+            # 更新角色信息
+            locked_target.role = self.validated_data['target_role']
+            locked_target.role_type = self.validated_data['target_role_type']
+            locked_target.save(update_fields=['role', 'role_type'])
+
+            # 写入审计日志
             AuditLog.objects.create(
                 tenant=operator.tenant,
                 operator=operator,
@@ -325,7 +368,7 @@ class AssignRoleSerializer(serializers.Serializer):
                 company_name=operator.tenant.name,
             ))
 
-        return target
+        return locked_target
 
 # 员工离职 序列化器
 class ResignUserSerializer(serializers.Serializer):
@@ -362,24 +405,29 @@ class ResignUserSerializer(serializers.Serializer):
 
         # 6. 只能操作在职用户
         if target.status != 'active':
-            raise serializers.ValidationError('只能操作在职用户')
+            raise serializers.ValidationError('账号状态异常，无法离职')
         
         attrs['target'] = target
         return attrs
 
     def save(self, **kwargs):
         target = self.validated_data['target']
-        # 获取操作人
+        target_id = target.id
         operator = self.context['request'].user
+        tenant = operator.tenant
 
         with transaction.atomic():
+            target = User.objects.select_for_update().get(id=target_id, tenant=tenant)
+            if target.status != 'active':
+                raise serializers.ValidationError('账号状态异常，无法离职')
             old_email = target.email
             timestamp = timezone.now().strftime('%Y%m%d%H%M%S')
             target.email = f'{target.email}_resigned_{timestamp}'
 
             target.status = 'resigned'
             target.save(update_fields=['email', 'status'])
-
+            
+            # 写审计日志
             AuditLog.objects.create(
                 tenant=operator.tenant,
                 operator=operator,
@@ -401,46 +449,61 @@ class SelfResignSerializer(serializers.Serializer):
         # 2. 必须是在职状态
         if user.status != 'active':
             raise serializers.ValidationError('账号状态异常，无法离职')
-
-        # 3. 是否还有其他在职董事
+        
+        # 3. 至少保留一名在职董事
         other_owners = User.objects.filter(
             tenant=user.tenant,
             role='owner',
             status='active',
         ).exclude(id=user.id)
-
         if not other_owners.exists():
             raise serializers.ValidationError(
                 '公司至少需要保留一位董事，请先委任新董事'
             )
 
+        attrs['user_id'] = user.id
+        attrs['tenant_id'] = user.tenant_id
         return attrs
 
     def save(self, **kwargs):
-        user = self.context['request'].user
+        user_id = self.validated_data['user_id']
+        tenant_id = self.validated_data['tenant_id']
 
         with transaction.atomic():
             # 锁住租户行，保证同一租户的董事正常离职
-            Tenant.objects.select_for_update().get(id=user.tenant_id)
+            Tenant.objects.select_for_update().get(id=tenant_id)
+            locked_user = User.objects.get(id=user_id, tenant_id=tenant_id)
             
+            # 至少保留一名在职董事
+            other_owners = User.objects.filter(
+                tenant_id=tenant_id,
+                role='owner',
+                status='active',
+            ).exclude(id=user_id)
+            if not other_owners.exists():
+                raise serializers.ValidationError('公司至少需要保留一位董事，请先委任新董事')
+
+            if locked_user.status != 'active':
+                raise serializers.ValidationError('账号状态异常，无法离职')
+
             # 1. 释放董事邮箱
-            old_email = user.email
+            old_email = locked_user.email
             timestamp = timezone.now().strftime('%Y%m%d%H%M%S')
-            user.email = f'{user.email}_resigned_{timestamp}'
+            locked_user.email = f'{locked_user.email}_resigned_{timestamp}'
 
             # 2. 改董事状态
-            user.status = 'resigned'
-            user.save(update_fields=['email', 'status'])
+            locked_user.status = 'resigned'
+            locked_user.save(update_fields=['email', 'status'])
 
             # 3. 写审计日志
             AuditLog.objects.create(
-                tenant=user.tenant,
-                operator=user,
-                target_user=user,
+                tenant_id=tenant_id,
+                operator=locked_user,
+                target_user=locked_user,
                 action='resign',
-                detail=f'董事 {user.full_name} 主动离职，原邮箱 {old_email}',
+                detail=f'董事 {locked_user.full_name} 主动离职，原邮箱 {old_email}',
             )
-        return user
+        return locked_user
     
 # 董事注销公司 序列化器
 class CancelTenantSerializer(serializers.Serializer):
@@ -468,19 +531,25 @@ class CancelTenantSerializer(serializers.Serializer):
         if user.tenant.status == 'banned':
             raise serializers.ValidationError('已封禁的企业无法注销，请联系平台客服')
 
+        attrs['user_id'] = user.id
+        attrs['tenant_id'] = user.tenant_id
         return attrs
 
     def save(self, **kwargs):
-        user = self.context['request'].user
+        user_id = self.validated_data['user_id']
+        tenant_id = self.validated_data['tenant_id']
 
         with transaction.atomic():
-            tenant = Tenant.objects.select_for_update().get(id=user.tenant_id)
+            tenant = Tenant.objects.select_for_update().get(id=tenant_id)
+            locked_user = User.objects.get(id=user_id, tenant_id=tenant_id)
 
             # 1. 二次校验注销
             if tenant.status == 'cancelled':
                 raise serializers.ValidationError('公司已注销')
             if tenant.status == 'banned':
                 raise serializers.ValidationError('已封禁的企业无法注销，请联系平台客服')
+            if locked_user.status != 'active':
+                raise serializers.ValidationError('账号状态已变更，操作失败')
 
             # 2. 收集所有董事信息
             owners = list(
@@ -538,10 +607,10 @@ class CancelTenantSerializer(serializers.Serializer):
             total_affected = active_count + pending_count + expired_count
             AuditLog.objects.create(
                 tenant=tenant,
-                operator=user,
-                target_user=user,
+                operator=locked_user,
+                target_user=locked_user,
                 action='cancel_tenant',
-                detail=f'董事 {user.full_name} 注销公司「{tenant.name}」，'
+                detail=f'董事 {locked_user.full_name} 注销公司「{tenant.name}」，'
                     f'影响 {active_count} 名在职、{pending_count} 名待激活、'
                     f'{expired_count} 名已过期用户',
             )
@@ -567,32 +636,32 @@ class ForgotPasswordSerializer(serializers.Serializer):
     def save(self, **kwargs):
         email = self.validated_data['email']
         user = User.objects.filter(email=email).first()
+        code = ''.join(random.choices('0123456789', k=6))
+        pipe = redis_client.pipeline()
 
         # "用户存在 + 未被封禁" 发邮件
         if user and not user.is_banned:
-            code = ''.join(random.choices('0123456789', k=6))
-
-            try:
-                send_mail(
-                    subject='【知识库系统】密码重置验证码',
-                    message=f'您的密码重置验证码是：{code}，5 分钟内有效。\n'
-                            f'如非本人操作，请忽略此邮件。',
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[email],
-                    fail_silently=False,
-                )
-            except Exception:
-                # 邮件失败：不存任何 Redis，直接抛异常
-                raise serializers.ValidationError('邮件发送失败，请稍后重试')
-
-            # 邮件成功后才存验证码和冷却时间
-            pipe = redis_client.pipeline()
+            pipe.set(f'reset_limit:{email}', '1', ex=60, nx=True)
             pipe.setex(f'reset_code:{email}', 300, code)
-            pipe.setex(f'reset_limit:{email}', 60, '1')
-            pipe.execute()
+
+            result = pipe.execute()
+            if result[0]:
+                try:
+                    send_mail(
+                        subject='【知识库系统】密码重置验证码',
+                        message=f'您的密码重置验证码是：{code}，5 分钟内有效。\n'
+                                f'如非本人操作，请忽略此邮件。',
+                        from_email=settings.DEFAULT_FROM_EMAIL,
+                        recipient_list=[email],
+                        fail_silently=False,
+                    )
+                except Exception:
+                    redis_client.delete(f'reset_limit:{email}', f'reset_code:{email}')
+                    raise serializers.ValidationError('邮件发送失败，请稍后重试')
 
         else:
-            redis_client.setex(f'reset_limit:{email}', 60, '1')
+            pipe.set(f'reset_limit:{email}', '1', ex=60, nx=True)
+            pipe.execute()
 
         return user
     
@@ -630,19 +699,33 @@ class ResetPasswordSerializer(serializers.Serializer):
         if user.status not in ['active', 'pending']:
             raise serializers.ValidationError('账号状态异常，无法重置密码')
 
-        attrs['user'] = user
+        attrs['user_id'] = user.id
+        attrs['email'] = email
         return attrs
 
     def save(self, **kwargs):
-        user = self.validated_data['user']
+        user_id = self.validated_data['user_id']
+        email = self.validated_data['email']
         new_password = self.validated_data['password']
 
         with transaction.atomic():
-            # 1. 更新密码
-            user.password = make_password(new_password)
-            user.save(update_fields=['password'])
+            locked_user = User.objects.get(id=user_id)
 
-            # 2. 删除 Redis 验证码（一次性）
-            redis_client.delete(f'reset_code:{user.email}')
+            # 二次校验
+            if locked_user.is_banned:
+                raise serializers.ValidationError('账号已被平台封禁，请联系平台客服')
+            if locked_user.status not in ['active', 'pending']:
+                raise serializers.ValidationError('账号状态异常，无法重置密码')
+            
+            pipe = redis_client.pipeline()
+            pipe.get(f'reset_code:{email}')
+            pipe.delete(f'reset_code:{email}')
+            res = pipe.execute()
+            real_code = res[0]
+            if not real_code or real_code != self.validated_data['code']:
+                raise serializers.ValidationError('验证码错误或已过期')
 
-        return user
+            # 更新密码
+            locked_user.password = make_password(new_password)
+            locked_user.save(update_fields=['password'])
+        return locked_user

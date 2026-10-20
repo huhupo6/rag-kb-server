@@ -13,3 +13,10 @@ db.sqlite3
 
 # 用户上传的媒体文件
 media/
+
+# celery 持久化调度文件
+celerybeat-schedule
+celerybeat-schedule.*
+
+# vscode本地配置（可选，推荐加上）
+.vscode/
