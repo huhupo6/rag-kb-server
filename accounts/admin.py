@@ -22,7 +22,7 @@ def unban_emails(modeladmin, request, queryset):
 def ban_users(modeladmin, request, queryset):
     add_count = 0
     for user in queryset:
-        email_to_ban = user.original_email or user.email
+        email_to_ban = user.real_email
         obj, created = BannedEmail.objects.update_or_create(
             email=email_to_ban,
             defaults={
@@ -39,7 +39,7 @@ def ban_users(modeladmin, request, queryset):
 def unban_users(modeladmin, request, queryset):
     count = 0
     for user in queryset:
-        email_to_unban = user.original_email or user.email
+        email_to_unban = user.real_email
         updated = BannedEmail.objects.filter(
             email=email_to_unban,
             is_active=True,

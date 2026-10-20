@@ -1,21 +1,29 @@
 from celery import shared_task
+
 from django.conf import settings
 from django.utils import timezone
 from django.core.mail import send_mail
-from .utils import expire_pending_user
+from django.db.models.functions import Concat
+from django.db.models import Value, F
 
 # 清理过期的待激活用户
 @shared_task
 def clean_expired_invitations():
     from .models import User
-    expired_users = User.objects.filter(
+    now = timezone.now()
+    timestamp = now.strftime('%Y%m%d%H%M%S')
+    
+    # 直接用一条 SQL 在数据库层面完成所有修改
+    count = User.objects.filter(
         status='pending',
-        activation_token_expires_at__lt=timezone.now(),
+        activation_token_expires_at__lt=now,
+    ).update(
+        email=Concat(F('email'), Value(f'_expired_{timestamp}')),
+        status='expired',
+        activation_token='',
+        activation_token_expires_at=None
     )
-    count = 0
-    for u in expired_users:
-        expire_pending_user(u)
-        count += 1
+    
     return f'清理了 {count} 个过期待激活用户'
 
 # 邀请用户后 发送邀请邮件

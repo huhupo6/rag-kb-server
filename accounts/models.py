@@ -6,6 +6,28 @@ class UserManager(BaseUserManager):
     def get_by_natural_key(self, username):
         return self.get(**{self.model.USERNAME_FIELD: username})
 
+    def create_superuser(self, email, password=None, **extra_fields):
+        """创建并保存一个平台超级管理员"""
+        if not email:
+            raise ValueError('超级管理员必须提供邮箱')
+        if not password:
+            raise ValueError('超级管理员必须提供密码')
+
+        # 设置平台超管的默认属性
+        extra_fields.setdefault('tenant', None)       # 平台超管不属于任何租户
+        extra_fields.setdefault('role', 'owner')      # 角色为董事
+        extra_fields.setdefault('role_type', '')      # 无具体职务
+        extra_fields.setdefault('status', 'active')   # 直接激活状态
+        extra_fields.setdefault('full_name', '平台管理员') # 默认姓名
+
+        # 实例化用户
+        user = self.model(email=self.normalize_email(email), **extra_fields)
+        
+        # 进行密码加密
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
 # tenants 租户表
 class Tenant(models.Model):
     STATUS_CHOICES = [
@@ -172,6 +194,10 @@ class User(models.Model):
     def is_superuser(self):
         return self.is_staff
 
+    @property
+    def real_email(self):
+        return self.original_email or self.email
+
     class Meta:
         db_table = 'users'
         verbose_name = '用户'
@@ -215,7 +241,7 @@ class AuditLog(models.Model):
 
     tenant = models.ForeignKey(
         'Tenant',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         null=True, blank=True,
         verbose_name='所属公司'
     )
@@ -246,6 +272,9 @@ class AuditLog(models.Model):
         verbose_name = '审计日志'
         verbose_name_plural = '审计日志'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['tenant', 'created_at'], name='audit_tenant_time_idx'),
+        ]
 
     def __str__(self):
         return f'{self.operator} {self.get_action_display()} {self.target_user}'

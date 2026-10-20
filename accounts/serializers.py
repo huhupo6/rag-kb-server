@@ -9,6 +9,8 @@ from django.db import transaction
 from django.utils import timezone
 from django.core.mail import send_mail
 from django.conf import settings
+from django.db.models.functions import Concat
+from django.db.models import Value, F
 
 # 3. DRF
 from rest_framework import serializers
@@ -16,11 +18,54 @@ from rest_framework import serializers
 # 4. 当前app自定义代码
 from .models import Tenant, User, BannedEmail, AuditLog
 from .utils import redis_client, check_tenant_active, expire_pending_user
-from .tasks import send_invite_email, send_invite_email, send_tenant_cancel_email, send_assign_role_email
+from .tasks import send_invite_email, send_tenant_cancel_email, send_assign_role_email
 
 # 企业注册-发送验证码 序列化器
 class SendCodeSerializer(serializers.Serializer):
     email = serializers.EmailField(label="邮箱")
+
+    def validate_email(self, value):
+        # 1. 检查邮箱是否被平台封禁
+        if BannedEmail.objects.filter(email=value).exists():
+            raise serializers.ValidationError('该邮箱已被平台封禁，请联系客服')
+        # 2. 检查邮箱是否已被注册
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError('该邮箱已被注册')
+        return value
+
+    def save(self, **kwargs):
+        email = self.validated_data['email']
+
+        # 3. 检查限流
+        if redis_client.exists(f'reg_code_limit:{email}'):
+            raise serializers.ValidationError('验证码已发送，请 60 秒后再试')
+
+        code = ''.join(random.choices('0123456789', k=6))
+        
+        # 4. 使用 Pipeline 打包写入 Redis
+        pipe = redis_client.pipeline()
+        pipe.set(f'reg_code_limit:{email}', '1', ex=60, nx=True)
+        pipe.setex(f'reg_code:{email}', 300, code)
+        result = pipe.execute()
+
+        if not result[0]:
+            raise serializers.ValidationError('操作过于频繁，请稍后再试')
+
+        # 5. 发送邮件，失败则回滚 Redis
+        try:
+            send_mail(
+                subject='【企业知识库】注册验证码',
+                message=f'您的验证码是：{code}，5 分钟内有效，请勿泄露给他人。',
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[email],
+                fail_silently=False,
+            )
+        except Exception:
+            # 发送失败，删除刚写入的 Redis
+            redis_client.delete(f'reg_code_limit:{email}', f'reg_code:{email}')
+            raise serializers.ValidationError('邮件发送失败，请稍后重试')
+
+        return email
 
 # 企业注册 序列化器
 class RegisterSerializer(serializers.Serializer):
@@ -574,34 +619,25 @@ class CancelTenantSerializer(serializers.Serializer):
             # 4. 清理所有未离职的用户
             timestamp = timezone.now().strftime('%Y%m%d%H%M%S')
             # active 用户 → resigned
-            active_users = User.objects.filter(tenant=tenant, status='active')
-            active_count = 0
-            for u in active_users:
-                u.email = f'{u.email}_resigned_{timestamp}'
-                u.status = 'resigned'
-                u.activation_token = ''
-                u.activation_token_expires_at = None
-                u.save(update_fields=['email', 'status', 'activation_token', 'activation_token_expires_at'])
-                active_count += 1
+            active_count = User.objects.filter(tenant=tenant, status='active').update(
+                email=Concat(F('email'), Value(f'_resigned_{timestamp}')),
+                status='resigned',
+                activation_token='',
+                activation_token_expires_at=None
+            )
             
             # pending 用户 → expired + 清空激活令牌
-            pending_users = User.objects.filter(tenant=tenant, status='pending')
-            pending_count = 0
-            for u in pending_users:
-                u.email = f'{u.email}_resigned_{timestamp}'
-                u.status = 'expired'
-                u.activation_token = ''
-                u.activation_token_expires_at = None
-                u.save(update_fields=['email', 'status', 'activation_token', 'activation_token_expires_at'])
-                pending_count += 1
+            pending_count = User.objects.filter(tenant=tenant, status='pending').update(
+                email=Concat(F('email'), Value(f'_resigned_{timestamp}')),
+                status='expired',
+                activation_token='',
+                activation_token_expires_at=None
+            )
 
             # expired 用户 → 释放邮箱
-            expired_users = User.objects.filter(tenant=tenant, status='expired')
-            expired_count = 0
-            for u in expired_users:
-                u.email = f'{u.email}_resigned_{timestamp}'
-                u.save(update_fields=['email'])
-                expired_count += 1
+            expired_count = User.objects.filter(tenant=tenant, status='expired').update(
+                email=Concat(F('email'), Value(f'_resigned_{timestamp}')),
+            )
 
             # 5. 写审计日志
             total_affected = active_count + pending_count + expired_count
