@@ -1,11 +1,14 @@
 import os
 import re
 import jieba
+
+from django.db import connection
 from django.db.models import Q
+
 from openai import OpenAI
 from documents.models import DocumentChunk
 from dotenv import load_dotenv
-from django.db import connection
+
 
 load_dotenv()
 
@@ -28,6 +31,7 @@ def tokenize_text(text):
     tokens = jieba.lcut(text)
     return ' '.join(tokens)
 
+# 全文检索召回
 def retrieve_chunks(question, tenant_id, top_k=3):
     query_tokenized = tokenize_text(question)
     # 给分词后的每个词加上 + 号
@@ -40,8 +44,8 @@ def retrieve_chunks(question, tenant_id, top_k=3):
                 SELECT id FROM documents 
                 WHERE tenant_id = %s AND is_current = 1 AND is_deleted = 0
             )
-            AND MATCH(content_tokenized) AGAINST(%s IN NATURAL LANGUAGE MODE)
-            ORDER BY MATCH(content_tokenized) AGAINST(%s IN NATURAL LANGUAGE MODE) DESC
+            AND MATCH(content_tokenized) AGAINST(%s IN BOOLEAN MODE)
+            ORDER BY MATCH(content_tokenized) AGAINST(%s IN BOOLEAN MODE) DESC
             LIMIT %s
         """
         cursor.execute(sql, [tenant_id, boolean_query, boolean_query, top_k])
@@ -63,7 +67,7 @@ def build_prompt(question, chunks):
     for idx, chunk in enumerate(chunks):
         context += f"【资料{idx+1}】{chunk.content}\n\n"
 
-        system_prompt = """你是一个严谨的企业知识库助手。
+    system_prompt = """你是一个严谨的企业知识库助手。
 请严格遵守以下规则：
 1. 仅根据【资料片段】回答用户问题。
 2. 如果资料片段中没有明确的数字、日期或具体结论，请直接回复：“知识库中未找到明确规定，请联系企业管理员”。
@@ -92,4 +96,3 @@ def ask_llm(question, chunks):
         return response.choices[0].message.content
     except Exception as e:
         return f"AI 服务暂时不可用，错误信息：{str(e)}"
-

@@ -194,8 +194,8 @@ def delete_document(request, doc_id):
 
     with transaction.atomic():
         affected = Document.objects.filter(
+            Q(parent_doc_id=root_id) | Q(id=root_id), 
             tenant=request.user.tenant,
-            parent_doc_id=root_id,
             is_deleted=False,
         ).update(is_deleted=True)
 

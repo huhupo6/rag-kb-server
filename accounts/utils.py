@@ -13,6 +13,7 @@ redis_client = redis.Redis(
 
 # 校验用户所属租户是否处于正常状态。
 def check_tenant_active(user):
+    
     # 租户为正常使用状态有效
     if user.tenant and user.tenant.status != 'active':
         status_messages = {

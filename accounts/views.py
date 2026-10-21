@@ -2,20 +2,24 @@
 import random
 
 # 2. Django
+from django.db.models import Q
 from django.core.mail import send_mail
 from django.conf import settings
 
 # 3. DRF
-from rest_framework.decorators import api_view
+from rest_framework.permissions import AllowAny
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 
 # 4. 当前app自定义代码
 from .models import User, BannedEmail
-from .utils import redis_client
+from .utils import redis_client, check_tenant_active
 from .serializers import (
     SendCodeSerializer,
     RegisterSerializer,
+    UserListSerializer,
     LoginSerializer,
     InviteSerializer,
     ActivateSerializer,
@@ -29,6 +33,7 @@ from .serializers import (
 
 # 企业注册-发送验证码 接口
 @api_view(['POST'])
+@permission_classes([AllowAny])
 def send_verification_code(request):
     serializer = SendCodeSerializer(data=request.data)
     if serializer.is_valid():
@@ -38,6 +43,7 @@ def send_verification_code(request):
 
 # 企业注册 接口
 @api_view(['POST'])
+@permission_classes([AllowAny])
 def register(request):
     serializer = RegisterSerializer(data=request.data)
 
@@ -65,6 +71,7 @@ def register(request):
 
 # 统一登录 接口
 @api_view(['POST'])
+@permission_classes([AllowAny])
 def login(request):
     serializer = LoginSerializer(data=request.data)
 
@@ -96,6 +103,40 @@ def login(request):
 
     # 校验失败，返回错误信息
     return Response(serializer.errors, status=400)
+
+# 人员列表展示 API
+@api_view(['GET'])
+def list_users(request):
+    # 1. 校验租户状态
+    check_tenant_active(request.user)
+
+    # 2. 权限校验：只有董事和 HR 才能访问人员管理列表
+    is_owner = request.user.role == 'owner'
+    is_hr = request.user.role == 'admin' and request.user.role_type == 'hr'
+    if not (is_owner or is_hr):
+        return Response({'error': '您没有权限查看人员列表'}, status=403)
+
+    # 3. 基础查询
+    queryset = User.objects.filter(tenant=request.user.tenant)
+    
+    # 4. 支持前端模糊搜索（按姓名或邮箱）
+    search_keyword = request.query_params.get('search', '').strip()
+    if search_keyword:
+        queryset = queryset.filter(
+            Q(full_name__icontains=search_keyword) | Q(email__icontains=search_keyword)
+        )
+        
+    # 5. 按邀请时间倒序
+    queryset = queryset.order_by('-invited_at')
+
+    # 6. 分页处理（每页 20 条）
+    paginator = PageNumberPagination()
+    paginator.page_size = 20
+    paginated_users = paginator.paginate_queryset(queryset, request)
+
+    serializer = UserListSerializer(paginated_users, many=True, context={'request': request})
+    
+    return paginator.get_paginated_response(serializer.data)
 
 # 董事邀请员工、HR、法务 / HR邀请员工 接口
 @api_view(['POST'])
@@ -196,6 +237,7 @@ def cancel_tenant(request):
 
 # 用户忘记密码-发送验证码 接口
 @api_view(['POST'])
+@permission_classes([AllowAny])
 def forgot_password(request):
     serializer = ForgotPasswordSerializer(data=request.data)
     if serializer.is_valid():
@@ -205,6 +247,7 @@ def forgot_password(request):
 
 # 用户忘记密码-重置密码 接口
 @api_view(['POST'])
+@permission_classes([AllowAny])
 def reset_password(request):
     serializer = ResetPasswordSerializer(data=request.data)
     if serializer.is_valid():

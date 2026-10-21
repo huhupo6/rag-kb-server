@@ -1,5 +1,7 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
+
 from accounts.utils import check_tenant_active
 from .services import retrieve_chunks, ask_llm, SENSITIVE_KEYWORDS
 from .models import ChatHistory
@@ -46,16 +48,25 @@ def ask_question(request):
 @api_view(['GET'])
 def my_history(request):
     check_tenant_active(request.user)
-    history = ChatHistory.objects.filter(user=request.user)
+
+    # 1. 获取基础 QuerySet
+    history_qs = ChatHistory.objects.filter(user=request.user).order_by('-created_at')
+
+    # 2. 实例化分页器
+    paginator = PageNumberPagination()
+    paginator.page_size = 10
+
+    # 3. 分页
+    paginated_history = paginator.paginate_queryset(history_qs, request)
     
     data = [{
         'id': h.id,
         'question': h.question,
         'answer': h.answer,
         'created_at': h.created_at.strftime('%Y-%m-%d %H:%M:%S')
-    } for h in history]
+    } for h in paginated_history]
 
-    return Response({'count': len(data), 'history': data}, status=200)
+    return paginator.get_paginated_response(data)
 
 # HR/法务/董事问答日志查看 接口
 @api_view(['GET'])
@@ -65,10 +76,18 @@ def view_logs(request):
     if request.user.role not in ['owner', 'admin']:
         return Response({'error': '无权限查看日志'}, status=403)
 
-    logs = ChatHistory.objects.filter(tenant_id=request.user.tenant_id).select_related('user')
-    
+    # 懒加载
+    logs_qs = ChatHistory.objects.filter(
+        tenant_id=request.user.tenant_id
+    ).select_related('user').order_by('-created_at')
+
+    # 分页处理
+    paginator = PageNumberPagination()
+    paginator.page_size = 20
+    paginated_logs = paginator.paginate_queryset(logs_qs, request)
+
     data = []
-    for log in logs:
+    for log in paginated_logs:
         # 董事看真实姓名
         # HR/法务看匿名
         if request.user.role == 'owner':
@@ -85,4 +104,4 @@ def view_logs(request):
             'created_at': log.created_at.strftime('%Y-%m-%d %H:%M:%S')
         })
 
-    return Response({'count': len(data), 'logs': data}, status=200)
+    return paginator.get_paginated_response(data)

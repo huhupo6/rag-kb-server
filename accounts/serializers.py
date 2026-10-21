@@ -166,6 +166,68 @@ class LoginSerializer(serializers.Serializer):
         attrs['user'] = user
         return attrs
 
+# 人员列表展示 序列化器
+class UserListSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+
+    # 动态计算前端按钮的显隐
+    can_operate = serializers.SerializerMethodField()
+    can_assign_role = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'full_name', 'role', 'role_type', 
+            'role_display', 'status', 'status_display', 
+            'invited_at', 'can_operate', 'can_assign_role'
+        ]
+
+    # 判断能否对目标用户执行离职操作
+    def get_can_operate(self, obj):
+        operator = self.context['request'].user
+
+        # 1. 只有在职用户才允许被操作
+        if obj.status != 'active':
+            return False
+            
+        # 2. 不能操作自己
+        if operator.id == obj.id:
+            return False
+            
+        # 3. 董事可以操作除自己外的非董事
+        if operator.role == 'owner':
+            return obj.role != 'owner'
+            
+        # 4. HR只能操作普通员工
+        if operator.role == 'admin' and operator.role_type == 'hr':
+            return obj.role == 'member'
+            
+        # 5. 其他情况无权操作
+        return False
+
+    # 判断能否对目标用户执行委任操作
+    def get_can_assign_role(self, obj):
+        operator = self.context['request'].user
+        
+        # 1. 只有在职用户才允许被委任
+        if obj.status != 'active':
+            return False
+            
+        # 2. 只有董事有委任权限
+        if operator.role != 'owner':
+            return False
+            
+        # 3. 董事不能委任自己
+        if operator.id == obj.id:
+            return False
+            
+        # 4. 董事之间无法互相委任
+        if obj.role == 'owner':
+            return False
+            
+        return True
+
 # 董事邀请董事长、HR、法务、员工 / HR只能邀请员工 序列化器
 class InviteSerializer(serializers.Serializer):
     email = serializers.EmailField(label='邮箱')

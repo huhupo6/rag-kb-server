@@ -3,7 +3,7 @@ from django.db import models
 # 问答历史记录表
 class ChatHistory(models.Model):
 
-    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.CASCADE, verbose_name='所属公司')
+    tenant = models.ForeignKey('accounts.Tenant', on_delete=models.PROTECT, verbose_name='所属公司')
     user = models.ForeignKey(
         'accounts.User', 
         on_delete=models.PROTECT, 

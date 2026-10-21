@@ -49,12 +49,14 @@ class Document(models.Model):
         verbose_name_plural = '文档'
         ordering = ['-uploaded_at']
         indexes = [
+            # 文档列表查询
             models.Index(fields=['tenant', 'is_current', 'is_deleted', 'uploaded_at'],name='doc_list_idx'),
+            # 文档历史版本查询
             models.Index(fields=['tenant', 'parent_doc_id', 'is_deleted', 'version'], name='doc_version_idx'),
         ]
 
-        def __str__(self):
-            return f'{self.file_name}（V{self.version}）'
+    def __str__(self):
+        return f'{self.file_name}（V{self.version}）'
 
 # 文档块表
 class DocumentChunk(models.Model):
@@ -69,6 +71,8 @@ class DocumentChunk(models.Model):
         verbose_name = '文档块'
         verbose_name_plural = '文档块'
         ordering = ['document', 'chunk_index']
+
+        # content_tokenized 字段的 FULLTEXT 全文索引已通过 0002 migration 使用 RunSQL 创建
 
     def __str__(self):
         return f'{self.document.file_name} - Chunk {self.chunk_index}'

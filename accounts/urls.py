@@ -8,6 +8,8 @@ urlpatterns = [
     path('send-code/', views.send_verification_code, name='send_code'),
     # 企业注册
     path('register/', views.register, name='register'),
+    # 人员列表
+    path('users/', views.list_users, name='list_users'),
     # 统一登录
     path('login/', views.login, name='login'),
     # 董事HR邀请成员
