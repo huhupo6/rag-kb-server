@@ -268,9 +268,21 @@ class InviteSerializer(serializers.Serializer):
         if BannedEmail.objects.filter(email=attrs['email'], is_active=True).exists():
             raise serializers.ValidationError('该邮箱已被封禁，无法邀请')
 
-        # 7. 邮箱不能重复
-        if User.objects.filter(email=attrs['email']).exists():
-            raise serializers.ValidationError('该邮箱已被注册')
+        # 7. 邮箱占用检查与过期同步释放
+        existing_user = User.objects.filter(email=attrs['email']).first()
+        if existing_user:
+            # 如果该账号处于待激活，且邀请已过期
+            if existing_user.status == 'pending' and existing_user.activation_token_expires_at and existing_user.activation_token_expires_at < timezone.now():
+                # 触发同步释放机制
+                timestamp = timezone.now().strftime('%Y%m%d%H%M%S')
+                existing_user.email = f'{existing_user.email}_expired_{timestamp}'
+                existing_user.status = 'expired'
+                existing_user.activation_token = ''
+                existing_user.activation_token_expires_at = None
+                existing_user.save(update_fields=['email', 'status', 'activation_token', 'activation_token_expires_at'])
+            else:
+                # 正常占用、未过期、或已激活的账号，直接拦截
+                raise serializers.ValidationError('该邮箱已被注册或正在等待激活')
 
         return attrs
 
