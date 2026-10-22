@@ -1,4 +1,5 @@
 import os
+import logging
 from dotenv import load_dotenv
 from pathlib import Path
 from datetime import timedelta
@@ -178,11 +179,42 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
 CORS_ALLOW_ALL_ORIGINS = True
 # CORS_ALLOWED_ORIGINS = []
 
+# 慢 SQL 监控与日志配置
+class SlowSQLFilter(logging.Filter):
+    def filter(self, record):
+        if hasattr(record, 'duration') and record.duration > 0.0002:
+            return True
+        return False
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "filters": {
+        "slow_sql": {
+            "()": SlowSQLFilter, 
+        },
+    },
+    "formatters": {
+        "verbose": {
+            # 使用 ANSI 转义码让慢 SQL 变成高亮红色加粗
+            # \033[1;31m 表示红色加粗，\033[0m 表示重置颜色
+            "format": "\033[1;31m[{asctime}] SLOW SQL ({duration:.3f}s) - {message}\033[0m",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+            "filters": ["slow_sql"],
+        },
+    },
     "loggers": {
+        "django.db.backends": {
+            "handlers": ["console"],
+            "level": "DEBUG",
+            "propagate": False,
+        },
         "queryguard": {
             "handlers": ["console"],
             "level": "DEBUG",
