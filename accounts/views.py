@@ -162,6 +162,7 @@ def invite(request):
 
 # 激活账号 接口
 @api_view(['POST'])
+@permission_classes([AllowAny])
 def activate(request):
     serializer = ActivateSerializer(data=request.data)
     if serializer.is_valid():
