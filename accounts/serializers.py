@@ -26,7 +26,7 @@ class SendCodeSerializer(serializers.Serializer):
 
     def validate_email(self, value):
         # 1. 检查邮箱是否被平台封禁
-        if BannedEmail.objects.filter(email=value).exists():
+        if BannedEmail.objects.filter(email=value, is_active=True).exists():
             raise serializers.ValidationError('该邮箱已被平台封禁，请联系客服')
         # 2. 检查邮箱是否已被注册
         if User.objects.filter(email=value).exists():

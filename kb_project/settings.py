@@ -179,6 +179,7 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
 CORS_ALLOW_ALL_ORIGINS = True
 # CORS_ALLOWED_ORIGINS = []
 
+'''慢SQL日志
 # 慢 SQL 监控与日志配置
 class SlowSQLFilter(logging.Filter):
     def filter(self, record):
@@ -216,6 +217,24 @@ LOGGING = {
             "propagate": False,
         },
         "queryguard": {
+            "handlers": ["console"],
+            "level": "DEBUG",
+            "propagate": False,
+        },
+    },
+}
+'''
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+        },
+    },
+    "loggers": {
+        "django.db.backends": {
             "handlers": ["console"],
             "level": "DEBUG",
             "propagate": False,
