@@ -35,3 +35,17 @@ def expire_pending_user(user):
     user.save(update_fields=[
         'email', 'status', 'activation_token', 'activation_token_expires_at'
     ])
+
+# 工具：将角色和角色类型翻译为完整的中文名称
+def get_role_full_name(role, role_type):
+    if role == 'owner':
+        return '董事'
+    elif role == 'admin':
+        if role_type == 'hr':
+            return 'HR'
+        elif role_type == 'legal':
+            return '法务'
+        return '管理员'
+    elif role == 'member':
+        return '员工'
+    return role

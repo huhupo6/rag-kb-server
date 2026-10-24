@@ -17,7 +17,7 @@ from rest_framework import serializers
 
 # 4. 当前app自定义代码
 from .models import Tenant, User, BannedEmail, AuditLog
-from .utils import redis_client, check_tenant_active, expire_pending_user
+from .utils import redis_client, check_tenant_active, expire_pending_user, get_role_full_name
 from .tasks import send_invite_email, send_tenant_cancel_email, send_assign_role_email
 
 # 企业注册-发送验证码 序列化器
@@ -450,8 +450,11 @@ class AssignRoleSerializer(serializers.Serializer):
     def save(self, **kwargs):
         target = self.validated_data['target']
         operator = self.context['request'].user
+
+        # 获取旧的角色信息
         old_role = target.role
         old_role_type = target.role_type
+        old_role_name = get_role_full_name(old_role, old_role_type)
 
         with transaction.atomic():
             # 加行锁
@@ -467,6 +470,9 @@ class AssignRoleSerializer(serializers.Serializer):
             locked_target.role = self.validated_data['target_role']
             locked_target.role_type = self.validated_data['target_role_type']
             locked_target.save(update_fields=['role', 'role_type'])
+            
+            # 获取新的角色信息
+            new_role_name = get_role_full_name(locked_target.role, locked_target.role_type)
 
             # 写入审计日志
             AuditLog.objects.create(
@@ -474,16 +480,15 @@ class AssignRoleSerializer(serializers.Serializer):
                 operator=operator,
                 target_user=target,
                 action='assign_role',
-                detail=f'角色从 {old_role}/{old_role_type or "无"} '
-                       f'改为 {target.role}/{target.role_type or "无"}',
+                detail=f'职位从 {old_role_name} 改为 {new_role_name}',
             )
 
             # 事务提交后发邮件
             transaction.on_commit(lambda: send_assign_role_email.delay(
                 email=target.email,
                 full_name=target.full_name,
-                old_role=old_role,
-                new_role=target.get_role_display(),
+                old_role=old_role_name,        
+                new_role=new_role_name,
                 company_name=operator.tenant.name,
             ))
 
