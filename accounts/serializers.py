@@ -550,6 +550,8 @@ class ResignUserSerializer(serializers.Serializer):
 
             target.status = 'resigned'
             target.save(update_fields=['email', 'status'])
+
+            role_name = get_role_full_name(target.role, target.role_type)
             
             # 写审计日志
             AuditLog.objects.create(
@@ -557,7 +559,7 @@ class ResignUserSerializer(serializers.Serializer):
                 operator=operator,
                 target_user=target,
                 action='resign',
-                detail=f'{target.full_name}（{target.get_role_display()}）离职，原邮箱 {old_email}',
+                detail=f'{target.full_name}（{role_name}）离职，原邮箱 {old_email}',
             )
         return target
 

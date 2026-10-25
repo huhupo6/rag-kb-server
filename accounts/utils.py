@@ -42,9 +42,9 @@ def get_role_full_name(role, role_type):
         return '董事'
     elif role == 'admin':
         if role_type == 'hr':
-            return 'HR'
+            return '管理员(HR)'
         elif role_type == 'legal':
-            return '法务'
+            return '管理员(法务)'
         return '管理员'
     elif role == 'member':
         return '员工'
