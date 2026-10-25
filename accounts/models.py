@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.hashers import check_password as django_check_password
+from django.utils.functional import cached_property
 
 class UserManager(BaseUserManager):
     def get_by_natural_key(self, username):
@@ -167,14 +168,14 @@ class User(models.Model):
         return False
 
     # 实时查询 BannedEmail 表，判断当前邮箱是否被封禁
-    @property
+    @cached_property
     def is_banned(self):
         emails = [self.email]
         if self.original_email:
             emails.append(self.original_email)
         return BannedEmail.objects.filter(email__in=emails, is_active=True).exists()
 
-    @property
+    @cached_property
     def is_active(self):
         return self.status == 'active' and not self.is_banned
 

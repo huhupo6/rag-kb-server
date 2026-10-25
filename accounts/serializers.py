@@ -803,35 +803,22 @@ class ResetPasswordSerializer(serializers.Serializer):
         if not saved_code or saved_code != code:
             raise serializers.ValidationError('验证码错误或已过期')
 
-        # 3. 查用户
-        user = User.objects.filter(email=email).first()
-        if not user:
-            raise serializers.ValidationError('用户不存在')
-
-        # 4. 平台封禁校验
-        if user.is_banned:
-            raise serializers.ValidationError('账号已被平台封禁，请联系平台客服')
-
-        # 5. 账号状态校验 只有 active 或 pending 才能重置密码
-        if user.status not in ['active', 'pending']:
-            raise serializers.ValidationError('账号状态异常，无法重置密码')
-
-        attrs['user_id'] = user.id
-        attrs['email'] = email
         return attrs
 
     def save(self, **kwargs):
-        user_id = self.validated_data['user_id']
         email = self.validated_data['email']
         new_password = self.validated_data['password']
 
         with transaction.atomic():
-            locked_user = User.objects.get(id=user_id)
+            user = User.objects.select_for_update().filter(email=email).first()
 
-            # 二次校验
-            if locked_user.is_banned:
+            if not user:
+                raise serializers.ValidationError('用户不存在')
+
+            if user.is_banned:
                 raise serializers.ValidationError('账号已被平台封禁，请联系平台客服')
-            if locked_user.status not in ['active', 'pending']:
+                
+            if user.status not in ['active', 'pending']:
                 raise serializers.ValidationError('账号状态异常，无法重置密码')
             
             pipe = redis_client.pipeline()
@@ -841,8 +828,8 @@ class ResetPasswordSerializer(serializers.Serializer):
             real_code = res[0]
             if not real_code or real_code != self.validated_data['code']:
                 raise serializers.ValidationError('验证码错误或已过期')
-
-            # 更新密码
-            locked_user.password = make_password(new_password)
-            locked_user.save(update_fields=['password'])
-        return locked_user
+            
+            user.password = make_password(new_password)
+            user.save(update_fields=['password'])
+            
+        return user
