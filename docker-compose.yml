@@ -72,6 +72,16 @@ services:
       - db
       - redis
 
+  # 6. RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"   # 通信端口
+      - "15672:15672" # 后台管理界面端口
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      
 # 数据卷，防止容器删了数据丢失
 volumes:
   mysql_data:
