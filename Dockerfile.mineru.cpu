@@ -1,0 +1,24 @@
+FROM python:3.10-slim
+
+# 阿里云
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || true
+
+# 安装MinerU运行必须的系统依赖，不多装冗余包
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-noto-core fonts-noto-cjk fontconfig libgl1 libglib2.0-0 \
+    && fc-cache -fv \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 升级pip、安装uv（国内源）
+RUN python3 -m pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple
+RUN python3 -m pip install uv -i https://mirrors.aliyun.com/pypi/simple
+
+# 安装 mineru[core] CPU 核心包，锁定4.x版本，国内pip源
+RUN uv pip install --system -U "mineru[core]>=4.0,<5" \
+    -i https://mirrors.aliyun.com/pypi/simple
+
+EXPOSE 8000
+
+# 启动API服务，指定CPU
+CMD ["mineru-api", "--host", "0.0.0.0", "--port", "8000", "--device", "cpu"]

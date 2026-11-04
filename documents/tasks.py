@@ -3,10 +3,12 @@ import logging
 from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
-
 from celery import shared_task
 from .models import Document, DocumentChunk
-from .services import extract_text, split_into_chunks, tokenize_chunk
+from .services.parser_factory import get_parser
+from .services.cleaners import clean_markdown
+from .services.splitters import split_into_chunks, tokenize_chunk
+from .services.clients import milvus_client, embedding_client
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +28,12 @@ def parse_document(doc_id):
     try:
         full_path = os.path.join(settings.MEDIA_ROOT, doc.file_path)
         
-        # 抽文本
-        text = extract_text(full_path)
+        # 获取后缀
+        suffix = os.path.splitext(full_path)[1].lower()
+
+        parser = get_parser(suffix)
+        raw_text = parser.parse(full_path)
+        text = clean_markdown(raw_text)
 
         # 分块
         chunks = split_into_chunks(text)
@@ -48,10 +54,10 @@ def parse_document(doc_id):
             )
 
         with transaction.atomic():
-            # 重试机制，先删除可能存在的旧块
+            # 先删除该文档已经存在的旧分片
             DocumentChunk.objects.filter(document=doc).delete()
 
-            # 一次性插入
+            # 批量插入
             DocumentChunk.objects.bulk_create(chunk_objects)
 
             # 更新状态为成功
@@ -59,12 +65,60 @@ def parse_document(doc_id):
             doc.parsed_at = timezone.now()
             doc.save(update_fields=['status', 'parsed_at'])
 
+        # 向量化并写入 Milvus
+        try:
+            collection_name = f"tenant_{doc.tenant_id}"
+            
+            # 1. 检查并创建集合
+            if collection_name not in milvus_client.list_collections():
+                milvus_client.create_collection(
+                    collection_name=collection_name,
+                    dimension=1024,
+                    metric_type="IP",
+                    id_type="string",
+                    max_length=65535
+                )
+                logger.info(f"新建 Milvus 集合: {collection_name}")
+
+            # 2. 提取文本，调用智谱 API 向量化
+            texts = [chunk.content for chunk in chunk_objects]
+            
+            # 批量请求，避免单次请求过长
+            all_vectors = []
+            batch_size = 20
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i+batch_size]
+                response = embedding_client.embeddings.create(
+                    model="embedding-3",
+                    input=batch_texts,
+                    dimensions=1024
+                )
+                batch_vectors = [data.embedding for data in response.data]
+                all_vectors.extend(batch_vectors)
+
+            # 3. 组装并插入 Milvus
+            data_to_insert = []
+            for i, chunk in enumerate(chunk_objects):
+                data_to_insert.append({
+                    "id": f"{doc.id}_{chunk.chunk_index}", 
+                    "vector": all_vectors[i],
+                    "text": chunk.content,
+                    "document_id": doc.id
+                })
+            
+            milvus_client.insert(collection_name=collection_name, data=data_to_insert)
+            logger.info(f"[{doc_id}] 成功将 {len(texts)} 个向量写入 Milvus 集合: {collection_name}")
+            
+        except Exception as e:
+            # 向量化失败不影响主流程（MySQL 已经有数据了），仅记录日志供后续重试
+            logger.error(f"[{doc_id}] 写入 Milvus 失败: {str(e)}", exc_info=True)
+
         return f'解析成功，共 {len(chunks)} 个块'
     
     # 解析失败 
     except Exception as e:
-        logger.error(f"文档解析失败 ID:{doc_id} - {str(e)}")
+        logger.error(f"文档解析失败 ID:{doc_id} - {str(e)}", exc_info=True)
         doc.status = 'failed'
-        doc.error_message = str(e)
+        doc.error_message = str(e)[:500]
         doc.save(update_fields=['status', 'error_message'])
         return f'解析失败: {str(e)}'

@@ -43,7 +43,6 @@ AUTH_USER_MODEL = 'accounts.User'
 
 # 中间件
 MIDDLEWARE = [
-    "queryguard.middleware.QueryGuardMiddleware",
     'corsheaders.middleware.CorsMiddleware',                    # 前后端跨域请求
     'django.middleware.security.SecurityMiddleware',            # 添加安全响应头
     'django.contrib.sessions.middleware.SessionMiddleware',     # 管理session会话
@@ -53,6 +52,15 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',     # 一次性flash提示消息
     'django.middleware.clickjacking.XFrameOptionsMiddleware',   # 禁止iframe嵌套
 ]
+
+if DEBUG:
+    try:
+        import queryguard
+        MIDDLEWARE.insert(0, "queryguard.middleware.QueryGuardMiddleware")
+        print("QueryGuard 已启用")
+    except ImportError:
+        print("未安装 queryguard，已跳过")
+        pass
 
 # 根路由
 ROOT_URLCONF = 'kb_project.urls'
@@ -125,7 +133,7 @@ REDIS_DB = os.getenv('REDIS_DB', 0)
 REDIS_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}'
 
 # Celery 配置
-RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', '127.0.0.1')
+RABBITMQ_HOST = os.getenv('RABBITMQ_HOST')
 RABBITMQ_PORT = os.getenv('RABBITMQ_PORT', 5672)
 RABBITMQ_USER = os.getenv('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD')
@@ -216,34 +224,38 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "default": {
-            "format": "%(message)s",
-        },
-        "queryguard_color": {
-            "format": "\033[1;31m%(message)s\033[0m",
-        },
+        "default": {"format": "%(message)s"},
     },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
             "formatter": "default",
         },
-
-        "queryguard_console": {
-            "class": "logging.StreamHandler",
-            "formatter": "queryguard_color", # 使用红色格式
-        },
     },
     "loggers": {
         "django.db.backends": {
             "handlers": ["console"],
-            "level": "DEBUG",
-            "propagate": False,
-        },
-        "queryguard": {
-            "handlers": ["queryguard_console"],
-            "level": "DEBUG",
+            "level": "INFO",
             "propagate": False,
         },
     },
 }
+
+# 只有本地调试时才开启 queryguard 的红色日志
+if DEBUG:
+    try:
+        import queryguard
+        LOGGING["formatters"]["queryguard_color"] = {
+            "format": "\033[1;31m%(message)s\033[0m",
+        }
+        LOGGING["handlers"]["queryguard_console"] = {
+            "class": "logging.StreamHandler",
+            "formatter": "queryguard_color",
+        }
+        LOGGING["loggers"]["queryguard"] = {
+            "handlers": ["queryguard_console"],
+            "level": "DEBUG",
+            "propagate": False,
+        }
+    except ImportError:
+        pass

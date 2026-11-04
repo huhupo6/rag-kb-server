@@ -8,9 +8,9 @@ services:
       MYSQL_ROOT_PASSWORD: 123456
       MYSQL_DATABASE: kb_db
       TZ: Asia/Shanghai
-    command: 
-      --character-set-server=utf8mb4 
-      --collation-server=utf8mb4_unicode_ci 
+    command:
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
       --innodb_ft_min_token_size=1
     ports:
       - "3307:3306"
@@ -41,8 +41,10 @@ services:
     depends_on:
       - db
       - redis
+      - rabbitmq
+      - mineru-api
 
-  # 4. Celery Worker (处理异步任务)
+  # 4. Celery Worker
   celery_worker:
     build: .
     container_name: kb_celery_worker
@@ -56,8 +58,10 @@ services:
     depends_on:
       - db
       - redis
+      - rabbitmq
+      - mineru-api
 
-  # 5. Celery Beat (处理定时任务)
+  # 5. Celery Beat
   celery_beat:
     build: .
     container_name: kb_celery_beat
@@ -71,6 +75,8 @@ services:
     depends_on:
       - db
       - redis
+      - rabbitmq
+      - mineru-api
 
   # 6. RabbitMQ
   rabbitmq:
@@ -81,8 +87,29 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
-      
-# 数据卷，防止容器删了数据丢失
+
+  # 7. MinerU 独立解析微服务
+  mineru-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.mineru.cpu
+    container_name: mineru-api
+    restart: always
+    command: ["mineru-api", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8001:8000"
+    environment:
+      MINERU_MODEL_SOURCE: modelscope
+      MODELSCOPE_HUB: /root/.cache/modelscope/hub
+      MINERU_DEVICE: cpu
+    volumes:
+      - ./mineru_models:/root/.cache/modelscope/hub
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ipc: host
+
+# 数据卷
 volumes:
   mysql_data:
   media_data:
