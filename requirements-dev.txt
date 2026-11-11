@@ -1,2 +1,5 @@
+# requirements-dev.txt
+# 本地开发依赖清单
+
 -r requirements.txt
 django-queryguard-n1

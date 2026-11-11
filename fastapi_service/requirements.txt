@@ -1,0 +1,10 @@
+# FastAPI 的依赖清单
+fastapi==0.110.0
+uvicorn==0.28.0
+pymysql==1.1.0
+pymilvus==2.4.10
+openai==1.70.0
+rank_bm25==0.2.2
+jieba==0.42.1
+python-dotenv==1.0.1
+# requests==2.32.3

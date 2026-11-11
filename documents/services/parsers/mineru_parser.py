@@ -1,3 +1,4 @@
+# 2. PDF/DOCX解析
 import os
 import logging
 import requests
@@ -5,8 +6,9 @@ from .base import BaseParser
 
 logger = logging.getLogger(__name__)
 
+"""基于 MinerU 微服务的文档解析器 (支持 PDF/DOCX)"""
 class MinerUParser(BaseParser):
-    """基于 MinerU 微服务的文档解析器 (支持 PDF/DOCX)"""
+
 
     def __init__(self):
         self.api_url = "http://mineru-api:8000/v1/file_parse"
@@ -40,7 +42,6 @@ class MinerUParser(BaseParser):
             # 调试时可以解除下面这行的注释，平时不用打印，不然日志太长
             # logger.info(f"========= MinerU返回的原始数据: {result} =========")
 
-            # 🌟 核心修改：精准提取 files[0].content.markdown
             markdown_text = ""
             try:
                 if 'files' in result and len(result['files']) > 0:

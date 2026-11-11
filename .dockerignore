@@ -1,3 +1,8 @@
+# .dockerignore
+# Docker 构建忽略清单
+# 作用：执行 docker build 时，下面这些文件/目录不会被 COPY 打包进镜像
+# 和 .gitignore 相互独立，只影响镜像构建，不控制 Git 提交
+
 # Python虚拟环境，不打包进镜像
 venv/
 

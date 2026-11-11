@@ -1,4 +1,5 @@
-# 数据清洗
+# 3. 数据清洗
+
 import re
 
 def clean_markdown(text: str) -> str:
@@ -17,5 +18,39 @@ def clean_markdown(text: str) -> str:
     text = re.sub(r'!\[.*?\]\(.*?\)', '', text)
     # 连续3个及以上换行压缩为两个换行，保留段落分隔
     text = re.sub(r'\n{3,}', '\n\n', text)
+
+    # 将 HTML 表格转换为 Markdown 表格，保护语义
+    def html_table_to_md(match):
+        html_table = match.group(0)
+        # 提取表头
+        headers = re.findall(r'<th[^>]*>(.*?)</th>', html_table, re.IGNORECASE)
+        if not headers:
+            # 如果没 th，尝试提取第一行 td 当表头
+            first_tr = re.search(r'<tr[^>]*>(.*?)</tr>', html_table, re.IGNORECASE)
+            if first_tr:
+                headers = re.findall(r'<td[^>]*>(.*?)</td>', first_tr.group(1), re.IGNORECASE)
+        
+        md_table = []
+        if headers:
+            md_table.append("| " + " | ".join([h.strip() for h in headers]) + " |")
+            md_table.append("| " + " | ".join(["---"] * len(headers)) + " |")
+
+        # 提取数据行
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html_table, re.IGNORECASE)
+        # 如果第一行被当成表头了，就从第二行开始读
+        start_idx = 1 if not re.search(r'<th', html_table, re.IGNORECASE) else 0
+        
+        for row in rows[start_idx:]:
+            cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.IGNORECASE)
+            if cells:
+                md_table.append("| " + " | ".join([c.strip() for c in cells]) + " |")
+        
+        return "\n" + "\n".join(md_table) + "\n"
+
+    # 匹配成对的 <table>...</table>
+    text = re.sub(r'<table.*?>.*?</table>', html_table_to_md, text, flags=re.DOTALL | re.IGNORECASE)
+
+    # 剩余的 <tr> <td> 标签直接去掉
+    text = re.sub(r'<[^>]+>', '', text)
 
     return text.strip()

@@ -31,12 +31,19 @@ class UserManager(BaseUserManager):
 
 # tenants 租户表
 class Tenant(models.Model):
+    # 服务状态
     STATUS_CHOICES = [
         ('active', '正常使用'),      # 正常使用
         ('suspended', '暂停服务'),   # 欠费
         ('banned', '已封禁'),        # 违规被封禁
         ('cancelled', '已注销'),     # 企业主动注销
     ]
+    # 套餐类型字段
+    PLAN_CHOICES = [
+        ('free', '轻量版'),
+        ('pro', '专业版'),
+    ]
+
     # 企业名称
     name = models.CharField(max_length=100, verbose_name='企业名称')
     # 企业状态
@@ -46,6 +53,14 @@ class Tenant(models.Model):
         default='active', 
         verbose_name='租户状态' 
     )
+    # 企业使用版本
+    plan_type = models.CharField(
+        max_length=10,
+        choices=PLAN_CHOICES,
+        default='free',
+        verbose_name='订阅套餐'
+    )
+
     # 注册时间
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='注册时间')
 
@@ -56,7 +71,7 @@ class Tenant(models.Model):
         verbose_name_plural = '租户'
 
     def __str__(self):
-        return self.name
+        return f'{self.name} ({self.get_plan_type_display()})'
 
 # users 用户表
 class User(models.Model):

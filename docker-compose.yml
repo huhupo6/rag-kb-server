@@ -1,3 +1,8 @@
+# docker-compose.yml
+# RAG 知识库系统主编排文件
+# 包含：Django、DRF、Celery、RabbitMQ、Redis、MySQL、Milvus、FastAPI
+# MinerU 文档解析服务独立于本文件，单独部署，通过 HTTP API 跨服务调用
+
 services:
   # 1. MySQL 数据库
   db:
@@ -108,6 +113,20 @@ services:
       memlock: -1
       stack: 67108864
     ipc: host
+
+  # 8. FastAPI 混合检索与 AI 问答微服务
+  fastapi-app:
+    build: ./fastapi_service
+    container_name: kb_fastapi
+    restart: always
+    ports:
+      - "9000:9000"  # 宿主机访问 9000 端口
+    volumes:
+      - ./fastapi_service:/app  # 挂载代码，支持热更新
+    env_file:
+      - .env
+    depends_on:
+      - db
 
 # 数据卷
 volumes:

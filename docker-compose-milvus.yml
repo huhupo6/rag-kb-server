@@ -1,3 +1,8 @@
+# docker-compose-mineru.yml
+# MinerU 文档解析微服务编排文件
+# 独立部署，供 RAG 知识库主系统通过 HTTP API 调用
+# 功能：PDF / DOCX 解析、布局识别、公式提取，输出 Markdown
+
 version: '3.5'
 
 services:
@@ -25,8 +30,8 @@ services:
       MINIO_ACCESS_KEY: minioadmin
       MINIO_SECRET_KEY: minioadmin
     ports:
-      - "9001:9001"
-      - "9000:9000"
+      - "9003:9001"
+      - "9002:9000"
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
     command: minio server /minio_data --console-address ":9001"

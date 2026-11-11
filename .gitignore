@@ -1,3 +1,7 @@
+# .gitignore
+# Git 提交忽略清单
+# 作用：git add / git commit 的时候，忽略下面这些文件，不上传到远程仓库
+
 # 虚拟环境
 venv/
 __pycache__/

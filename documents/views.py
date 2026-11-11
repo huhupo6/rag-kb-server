@@ -1,10 +1,24 @@
+# 标准库
+import os
+import logging
+
+# 第三方库
+import requests
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from accounts.utils import check_tenant_active
-from .serializers import DocumentUploadSerializer, DocumentNewVersionSerializer
-from .models import Document
+
+# Django 内置
 from django.db import transaction
 from django.db.models import Q
+
+# 项目内部模块
+from accounts.utils import check_tenant_active
+from .models import Document
+from .serializers import DocumentUploadSerializer, DocumentNewVersionSerializer
+from .services.clients import get_milvus_client
+
+# 初始化 logger
+logger = logging.getLogger(__name__)
 
 # 上传新文档 接口
 @api_view(['POST'])
@@ -208,6 +222,42 @@ def delete_document(request, doc_id):
             detail=f'{request.user.full_name} 删除了文档「{doc.file_name}」'
                    f'（版本链共 {affected} 个版本）',
         )
+
+    # 6. 通知 Milvus 删除向量
+    try:
+        # 只有专业版才需要清理 Milvus
+        if request.user.tenant.plan_type == 'pro':
+            milvus_client = get_milvus_client()
+            
+            if milvus_client:
+                collection_name = f"tenant_{request.user.tenant_id}"
+
+                # 查找整条版本链上的所有文档 ID
+                chain_ids = list(Document.objects.filter(
+                    Q(parent_doc_id=root_id) | Q(id=root_id), 
+                    tenant=request.user.tenant
+                ).values_list('id', flat=True))
+
+                # 只要集合存在，就执行过滤删除
+                if collection_name in milvus_client.list_collections():
+                    milvus_client.delete(
+                        collection_name=collection_name,
+                        filter=f"document_id in {chain_ids}"
+                    )
+                    logger.info(f"已清理删除文档链的向量数据: {chain_ids}")
+    except Exception as e:
+        logger.error(f"清理 Milvus 向量失败: {e}")
+
+    # 7. 通知 FastAPI 清理该租户的 BM25 内存缓存
+    try:
+        fastapi_url = os.getenv("FASTAPI_URL", "http://fastapi-app:9000")
+        refresh_url = f"{fastapi_url}/api/refresh_cache?tenant_id={request.user.tenant_id}"
+        # 设置 3 秒超时，防止 FastAPI 挂了卡死 Django
+        requests.post(refresh_url, timeout=3)
+        
+        logger.info(f"已成功通知 FastAPI 清理租户 {request.user.tenant_id} 的 BM25 缓存")
+    except Exception as e:
+        logger.warning(f"通知 FastAPI 清理缓存失败: {e}")
 
     return Response({
         'message': '文档链已删除',
