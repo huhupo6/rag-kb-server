@@ -2,6 +2,7 @@ import redis
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
+from rest_framework_simplejwt.tokens import RefreshToken
 
 # 全局 Redis 客户端
 redis_client = redis.Redis(
@@ -49,3 +50,26 @@ def get_role_full_name(role, role_type):
     elif role == 'member':
         return '员工'
     return role
+
+# 统一生成带指纹和权限信息的 JWT Token
+def generate_jwt_tokens(user):
+    refresh = RefreshToken.for_user(user)
+
+    # 提取指纹和角色信息
+    pwd_fp = user.password[-8:] if user.password else ''
+    role = user.role
+    role_type = user.role_type
+
+    # 注入 Refresh Token
+    refresh['pwd_fp'] = pwd_fp
+    refresh['role'] = role
+    refresh['role_type'] = role_type
+
+    # 注入 Access Token
+    refresh.access_token['pwd_fp'] = pwd_fp
+    refresh.access_token['role'] = role
+    refresh.access_token['role_type'] = role_type
+
+    # 返回 (access_token, refresh_token)
+    return str(refresh.access_token), str(refresh)
+

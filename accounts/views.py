@@ -11,11 +11,10 @@ from rest_framework.permissions import AllowAny
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework_simplejwt.tokens import RefreshToken
 
 # 4. 当前app自定义代码
 from .models import User, BannedEmail
-from .utils import redis_client, check_tenant_active
+from .utils import redis_client, check_tenant_active, generate_jwt_tokens
 from .serializers import (
     SendCodeSerializer,
     RegisterSerializer,
@@ -50,8 +49,8 @@ def register(request):
     if serializer.is_valid():
         user = serializer.save()
 
-        # 注册后，JWT签发
-        refresh = RefreshToken.for_user(user)
+        # 统一调用工具函数生成 Token
+        access_token, refresh_token = generate_jwt_tokens(user)
 
         return Response({
             'message': '注册成功',
@@ -62,8 +61,8 @@ def register(request):
                 'role': user.role,
                 'tenant_name': user.tenant.name,
             },
-            'access': str(refresh.access_token),
-            'refresh': str(refresh),
+            'access': access_token,
+            'refresh': refresh_token,
         }, status=201)
 
     # 校验失败，返回错误信息
@@ -78,13 +77,8 @@ def login(request):
     if serializer.is_valid():
         user = serializer.validated_data['user']
 
-        refresh = RefreshToken.for_user(user)
-        refresh['pwd_fp'] = user.password[-8:]
-        refresh.access_token['pwd_fp'] = user.password[-8:]
-        refresh['role'] = user.role
-        refresh.access_token['role'] = user.role
-        refresh['role_type'] = user.role_type
-        refresh.access_token['role_type'] = user.role_type
+        # 统一调用工具函数生成 Token
+        access_token, refresh_token = generate_jwt_tokens(user)
 
         return Response({
             'message': '登录成功',
@@ -97,8 +91,8 @@ def login(request):
                 'tenant_id': user.tenant_id,
                 'tenant_name': user.tenant.name if user.tenant else '',
             },
-            'access': str(refresh.access_token),
-            'refresh': str(refresh),
+            'access': access_token,
+            'refresh': refresh_token,
         }, status=200)
 
     # 校验失败，返回错误信息

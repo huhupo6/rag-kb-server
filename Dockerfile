@@ -10,7 +10,7 @@ FROM python:3.11-slim-bookworm
 # 设置容器内的工作目录为 /app
 WORKDIR /app
 
-# 设置环境变量，防止 Python 写 pyc 文件
+ # 设置环境变量，防止 Python 写 pyc 文件
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
 
