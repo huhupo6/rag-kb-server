@@ -1,12 +1,33 @@
 # BM25 全文检索 文件
+
+# 1. Python内置
+import logging
+import re
+
+# 2. 第三方
 import jieba
 import pymysql
-import logging
 from rank_bm25 import BM25Okapi
+
+# 3. 当前项目配置
 from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME
 
 logger = logging.getLogger(__name__)
 
+# jieba 分词预处理
+def tokenize_query(text: str) -> list:
+    # 正则：匹配整数/小数，后面可选跟随 %、天、个、月、年、元、号、日
+    pattern = r'\d+(?:\.\d+)?[%天个月元年号日]?'
+    # 提取文本中所有匹配到的数字+单位片段
+    matches = re.findall(pattern, text)
+
+    for m in matches:
+        # 强制将数字+单位组合加入词典
+        jieba.add_word(m)
+
+    return jieba.lcut(text)
+
+# 多租户 BM25 检索
 class TenantBM25Engine:
     def __init__(self, tenant_id: int):
         self.tenant_id = tenant_id
@@ -34,6 +55,7 @@ class TenantBM25Engine:
             conn.close()
 
             if not rows:
+                logger.warning(f"租户 {self.tenant_id} 暂无可用文档块，BM25 索引为空。")
                 return
 
             corpus = []
@@ -44,7 +66,7 @@ class TenantBM25Engine:
                 self.chunks_content.append(row['content'])
 
             self.bm25 = BM25Okapi(corpus)
-            logger.info(f"✅ 租户 {self.tenant_id} 的 BM25 索引构建成功，共 {len(corpus)} 个文本块。")
+            logger.info(f"✅  租户 {self.tenant_id} 的 BM25 索引构建成功，共 {len(corpus)} 个文本块。")
             
         except Exception as e:
             logger.error(f"构建 BM25 索引失败: {e}")
@@ -53,7 +75,7 @@ class TenantBM25Engine:
         if not self.bm25:
             return []
         
-        tokenized_query = jieba.lcut(query)
+        tokenized_query = tokenize_query(query)
         scores = self.bm25.get_scores(tokenized_query)
         
         top_n = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]

@@ -1,7 +1,13 @@
-import os
+# 1. Python内置
 import logging
+import os
+
+# 2. 第三方
 from openai import OpenAI
+
+# 3. 当前项目配置
 from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +54,7 @@ def generate_stream(query: str, contexts: list):
         yield f"\n[AI 服务异常: {str(e)}]"
 
 # 用于测试的非流式生成接口
+'''
 def generate_sync(query: str, contexts: list) -> str:
     if not contexts:
         return "知识库中未找到相关规定，请联系企业管理员。"
@@ -75,3 +82,4 @@ def generate_sync(query: str, contexts: list) -> str:
         return response.choices[0].message.content
     except Exception as e:
         return f"测试接口报错: {str(e)}"
+'''
