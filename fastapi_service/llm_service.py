@@ -1,6 +1,5 @@
 # 1. Python内置
 import logging
-import os
 
 # 2. 第三方
 from openai import OpenAI
@@ -12,8 +11,8 @@ from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
 logger = logging.getLogger(__name__)
 
 client = OpenAI(
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com/v1"
+    api_key=DEEPSEEK_API_KEY,
+    base_url=DEEPSEEK_BASE_URL
 )
 
 # 调用 DeepSeek 流式输出
