@@ -3,6 +3,7 @@
 # 1. Python内置
 import logging
 import re
+import collections
 
 # 2. 第三方
 import jieba
@@ -91,11 +92,23 @@ class TenantBM25Engine:
         return results
 
 # 全局单例缓存池
-bm25_engines = {}
+MAX_CACHED_TENANTS = 5
+bm25_engines = collections.OrderedDict()
 
+# 内存淘汰
 def get_bm25_engine(tenant_id: int) -> TenantBM25Engine:
+    # 1. 如果已在缓存中，将其移动到末尾
     if tenant_id not in bm25_engines:
-        bm25_engines[tenant_id] = TenantBM25Engine(tenant_id)
+        bm25_engines.move_to_end(tenant_id)
+    return bm25_engines[tenant_id]
+
+    # 2. 如果缓存满了，淘汰最久未使用的
+    if len(bm25_engines) >= MAX_CACHED_TENANTS:
+        oldest_tenant_id, _ = bm25_engines.popitem(last=False)
+        logger.info(f"LRU 淘汰：内存限制 {MAX_CACHED_TENANTS} 个，已释放租户 {oldest_tenant_id} 的 BM25 缓存")
+
+    # 3. 初始化新引擎并加入缓存
+    bm25_engines[tenant_id] = TenantBM25Engine(tenant_id)
     return bm25_engines[tenant_id]
 
 # 清除指定租户的 BM25 缓存

@@ -37,6 +37,7 @@ class DocumentUploadSerializer(serializers.Serializer):
         label='文档分类'
     )
 
+    # 文档大小  格式校验
     def validate_file(self, value):
         # 1. 检查扩展名
         ext = os.path.splitext(value.name)[1].lower()
@@ -48,6 +49,29 @@ class DocumentUploadSerializer(serializers.Serializer):
             raise serializers.ValidationError('文件不能超过 50MB')
 
         return value
+
+    # 增加套餐配额限制（Free 版限制 10 个，Pro 版限制 500 个）
+    def validate(self, attrs):
+        user = self.context['request'].user
+        tenant = user.tenant
+        max_docs = 10 if tenant.plan_type == 'free' else 500
+
+        # 统计当前租户已上传的有效文档数（当前版本、未软删）
+        current_docs_count = Document.objects.filter(
+            tenant=tenant,
+            is_current=True,
+            is_deleted=False
+        ).count()
+
+        # 文档数量检验
+        if current_docs_count >= max_docs:
+            plan_name = "轻享版" if tenant.plan_type == 'free' else "专业版"
+            raise serializers.ValidationError(
+                f'当前【{plan_name}】最多只能上传 {max_docs} 个文档。'
+                f'如需上传更多，请删除旧文档或联系管理员升级套餐。'
+            )
+
+        return attrs
 
     def create(self, validated_data):
         request = self.context['request']
@@ -88,7 +112,6 @@ class DocumentUploadSerializer(serializers.Serializer):
                 except Exception as remove_err:
                     logger.error(f"清理文件失败: {remove_err}")
             raise e
-
 
 # 新版本文档上传 序列化器
 class DocumentNewVersionSerializer(serializers.Serializer):
