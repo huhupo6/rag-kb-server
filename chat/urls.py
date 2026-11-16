@@ -10,4 +10,6 @@ urlpatterns = [
     path('history/', views.my_history, name='my_history'),
     # HR/法务/董事问答日志查看
     path('logs/', views.view_logs, name='view_logs'),
+    # Token 用量看板
+    path('usage/', views.get_token_usage, name='token_usage'),
 ]

@@ -13,6 +13,11 @@ DB_USER = os.getenv('DB_USER')
 DB_PASSWORD = os.getenv('DB_PASSWORD')
 DB_NAME = os.getenv('DB_NAME')
 
+# Redis 配置
+REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_DB = int(os.getenv('REDIS_DB', 0))
+
 # Milvus 向量库配置
 MILVUS_URI = os.getenv("MILVUS_URI", "http://milvus-standalone:19530")
 

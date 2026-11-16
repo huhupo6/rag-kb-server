@@ -4,6 +4,7 @@ from django.db import models
 class ChatHistory(models.Model):
 
     tenant = models.ForeignKey('accounts.Tenant', on_delete=models.PROTECT, verbose_name='所属公司')
+    
     user = models.ForeignKey(
         'accounts.User', 
         on_delete=models.PROTECT, 
@@ -11,11 +12,18 @@ class ChatHistory(models.Model):
     )
     
     question = models.TextField(verbose_name='用户问题')
+    
     answer = models.TextField(verbose_name='AI 答案')
 
     cited_chunks = models.JSONField(default=list, blank=True, verbose_name='引用的文档块ID列表')
 
     is_sensitive = models.BooleanField(default=False, verbose_name='是否敏感问题')
+
+    prompt_tokens = models.IntegerField(default=0, verbose_name='提问消耗Token')
+
+    completion_tokens = models.IntegerField(default=0, verbose_name='回答消耗Token')
+    
+    total_tokens = models.IntegerField(default=0, verbose_name='总消耗Token')
 
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='提问时间')
 

@@ -1,5 +1,6 @@
 # 1. Python内置
 import logging
+import json
 
 # 2. 第三方
 from openai import OpenAI
@@ -41,12 +42,24 @@ def generate_stream(query: str, contexts: list):
             ],
             temperature=0.1,
             stream=True
+            stream_options={"include_usage": True}
         )
 
+        usage_data = None
         for chunk in response:
             content = chunk.choices[0].delta.content
             if content:
                 yield content
+
+        if chunk.usage:
+                usage_data = {
+                    "prompt_tokens": chunk.usage.prompt_tokens,
+                    "completion_tokens": chunk.usage.completion_tokens,
+                    "total_tokens": chunk.usage.total_tokens
+                }
+
+        if usage_data:
+            yield f"__USAGE__{json.dumps(usage_data)}"
                 
     except Exception as e:
         logger.error(f"大模型调用失败: {e}")

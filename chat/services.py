@@ -93,6 +93,17 @@ def ask_llm(question, chunks):
             temperature=0.1,
             max_tokens=800
         )
-        return response.choices[0].message.content
+        
+        answer = response.choices[0].message.content
+
+        # Token 消耗
+        usage_data = {
+            "prompt_tokens": response.usage.prompt_tokens,
+            "completion_tokens": response.usage.completion_tokens,
+            "total_tokens": response.usage.total_tokens,
+        }
+
+        return answer, usage_data
+
     except Exception as e:
         return f"AI 服务暂时不可用，错误信息：{str(e)}"
