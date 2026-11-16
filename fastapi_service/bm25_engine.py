@@ -6,11 +6,11 @@ import collections
 # 2. 第三方
 import jieba
 import pymysql
-import redis
 from dbutils.pooled_db import PooledDB
 from rank_bm25 import BM25Okapi
 
 # 3. 当前项目配置
+from kb_tokenizer import tokenize_text
 from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, redis_client
 
 logger = logging.getLogger(__name__)
@@ -29,36 +29,6 @@ POOL = PooledDB(
     charset='utf8mb4',
     cursorclass=pymysql.cursors.DictCursor
 )
-
-def tokenize_query(text: str) -> list:
-    """
-    后置合并分词：防止污染全局词典，同时保护数字+单位
-    示例："3天" 作为一个整体分词，而不是 ["3","天"]
-    """
-    # 1. 先用默认词典正常分词
-    tokens = jieba.lcut(text)
-
-    merged_tokens = []
-    skip_next = False
-
-    # 2. 在列表层面进行词组合并
-    for i in range(len(tokens)):
-        if skip_next:
-            skip_next = False
-            continue
-
-        current = tokens[i]
-
-        # 如果当前是数字，且下一个是单位，则合并
-        if i + 1 < len(tokens):
-            next_word = tokens[i+1]
-            if re.fullmatch(r'\d+(?:\.\d+)?', current) and next_word in ['天', '个', '月', '年', '元', '号', '日', '%']:
-                merged_tokens.append(current + next_word)
-                skip_next = True
-                continue
-        merged_tokens.append(current)
-        
-    return merged_tokens    
 
 class TenantBM25Engine:
     """
@@ -120,9 +90,8 @@ class TenantBM25Engine:
         if not self.bm25:
             return []
 
-        tokenized_query = tokenize_query(query)
+        tokenized_query = tokenize_text(query)
         scores = self.bm25.get_scores(tokenized_query)
-
         # 按分数从高到低排序，取前top_k
         top_n = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
 

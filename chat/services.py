@@ -1,12 +1,12 @@
 import os
 import re
-import jieba
 
 from django.db import connection
 
 from openai import OpenAI
 from documents.models import DocumentChunk
 from dotenv import load_dotenv
+from kb_tokenizer import tokenize_text
 
 # 加载环境变量
 load_dotenv()
@@ -20,23 +20,6 @@ client = OpenAI(
 # 敏感词库，用于检测用户提问是否包含敏感内容
 SENSITIVE_KEYWORDS = ['薪资', '裁员', '赔偿', '竞业', '保密', '合同', '绩效', '开除']
 
-
-def tokenize_text(text: str) -> str:
-    """
-    jieba分词预处理，保护数字+单位不被切碎
-    示例："3天" 作为整体词条，不会切分成 ["3","天"]
-    :param text: 原始文本
-    :return: 空格分隔的分词字符串，用于MySQL全文检索
-    """
-    pattern = r'\d+(?:\.\d+)?[%天个月元年号日]?'
-    matches = re.findall(pattern, text)
-    for m in matches:
-        jieba.add_word(m)
-
-    tokens = jieba.lcut(text)
-    return ' '.join(tokens)
-
-
 def retrieve_chunks(question: str, tenant_id: int, top_k: int = 3) -> list[DocumentChunk]:
     """
     MySQL全文检索召回文档块（Boolean模式）
@@ -46,9 +29,9 @@ def retrieve_chunks(question: str, tenant_id: int, top_k: int = 3) -> list[Docum
     :param top_k: 召回片段数量
     :return: 按相关性排序好的DocumentChunk对象列表
     """
-    query_tokenized = tokenize_text(question)
+    query_tokens = tokenize_text(question)
     # 构造布尔查询，要求所有分词词项都命中
-    boolean_query = " ".join([f"+{word}" for word in query_tokenized.split() if word.strip()])
+    boolean_query = " ".join([f"+{word}" for word in query_tokens if word.strip()])
 
     with connection.cursor() as cursor:
         sql = """
@@ -96,7 +79,7 @@ def build_prompt(question: str, chunks: list[DocumentChunk]) -> tuple[str, str]:
     return system_prompt, user_prompt
 
 
-def ask_llm(question: str, chunks: list[DocumentChunk]) -> tuple[str, dict] | str:
+def ask_llm(question: str, chunks: list[DocumentChunk]) -> tuple[str, dict]:
     """
     调用DeepSeek大模型生成回答，统计token消耗
     :param question: 用户问题

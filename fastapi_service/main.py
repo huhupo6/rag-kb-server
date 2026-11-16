@@ -3,11 +3,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from rag_engine import hybrid_search
 from llm_service import generate_stream, generate_sync
-from bm25_engine import get_bm25_engine, clear_bm25_engine
+from bm25_engine import clear_bm25_engine
 import pymysql
 import json
-import redis
-from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, REDIS_HOST, REDIS_PORT, REDIS_DB, redis_client
+from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, redis_client
 
 app = FastAPI(title="RAG 检索增强 API", version="1.0")
 

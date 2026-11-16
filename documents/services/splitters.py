@@ -4,7 +4,7 @@
 import re
 import jieba
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
+from kb_tokenizer import tokenize_text
 
 def split_into_chunks(text: str):
     """
@@ -63,22 +63,6 @@ def split_into_chunks(text: str):
 
 
 def tokenize_chunk(text: str) -> str:
-    """
-    BM25 分词预处理
-    - 识别数字 + 单位组合，动态加入 jieba 词典，避免被切碎（如：3天、50%、2026年）
-    - 使用精确模式分词，最后用空格拼接，适配 rank_bm25 的输入格式
-    :param text: 单个文本块
-    :return: 空格分隔的分词字符串
-    """
-    # 匹配整数/小数，后可携带 %、天、个、月、年、元、号、日
-    pattern = r'\d+(?:\.\d+)?[%天个月元年号日]?'
-    matches = re.findall(pattern, text)
-
-    for m in matches:
-        # 将识别到的词条临时加入词典，保证分词完整性
-        jieba.add_word(m)
-
-    # 精确分词
-    tokens = jieba.lcut(text)
-    # 拼接为空格分隔字符串，供 BM25Okapi 使用
+    """Django 入库端：调用公共包分词后，用空格拼接供 MySQL 使用"""
+    tokens = tokenize_text(text)
     return " ".join(tokens)
