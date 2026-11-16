@@ -1,10 +1,20 @@
+"""
+accounts/models.py
+账号模块数据模型
+包含：租户Tenant、用户User、封禁邮箱BannedEmail、审计日志AuditLog
+自定义UserManager，适配Django认证体系，实现多租户两级RBAC权限、账号黑名单、操作审计
+"""
+
+# Django内置
 from django.db import models
 from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.hashers import check_password as django_check_password
 from django.utils.functional import cached_property
 
 class UserManager(BaseUserManager):
+    """用户自定义管理器，适配Django认证体系"""
     def get_by_natural_key(self, username):
+        """Django认证调用，通过USERNAME_FIELD（邮箱）查询用户"""
         return self.get(**{self.model.USERNAME_FIELD: username})
 
     def create_superuser(self, email, password=None, **extra_fields):
@@ -29,14 +39,14 @@ class UserManager(BaseUserManager):
         user.save(using=self._db)
         return user
 
-# tenants 租户表
 class Tenant(models.Model):
+    """租户（企业）模型，SaaS多租户隔离主体"""
     # 服务状态
     STATUS_CHOICES = [
-        ('active', '正常使用'),      # 正常使用
-        ('suspended', '暂停服务'),   # 欠费
-        ('banned', '已封禁'),        # 违规被封禁
-        ('cancelled', '已注销'),     # 企业主动注销
+        ('active', '正常使用'),     # 正常使用
+        ('suspended', '暂停服务'),  # 欠费
+        ('banned', '已封禁'),       # 违规被封禁
+        ('cancelled', '已注销'),    # 企业主动注销
     ]
     # 套餐类型字段
     PLAN_CHOICES = [
@@ -73,8 +83,8 @@ class Tenant(models.Model):
     def __str__(self):
         return f'{self.name} ({self.get_plan_type_display()})'
 
-# users 用户表
 class User(models.Model):
+    """用户模型，用户认证，适配Django auth接口，两级RBAC权限"""
     # role：一级权限
     ROLE_CHOICES = [
         ('owner', '董事'), 
@@ -84,107 +94,116 @@ class User(models.Model):
 
     # role_type：二级权限
     ROLE_TYPE_CHOICES = [
-    ('hr', 'HR'), 
-    ('legal', '法务'), 
-    ('', '无'), 
+        ('hr', 'HR'), 
+        ('legal', '法务'), 
+        ('', '无'), 
     ]
 
     # status：账号状态
     STATUS_CHOICES = [
         ('pending', '待激活'),
         ('active', '在职'),
-        ('resigned', '已离职'),  # 默认注销 = 已离职
+        ('resigned', '已离职'),
         ('expired', '邀请已过期'),
     ]
 
-    # tenant_id
+    # 所属租户，平台管理员为null
     tenant = models.ForeignKey(
         'Tenant', 
         on_delete=models.PROTECT, 
         null=True, blank=True, 
         verbose_name='所属公司'
-        )
-    # 邮箱
+    )
+    # 登录邮箱
     email = models.EmailField(unique=True, verbose_name='邮箱')
-    # 原始邮箱
+    # 原始邮箱：用于邀请过期改名后，追踪真实邮箱，黑名单匹配
     original_email = models.EmailField(blank=True, verbose_name='原始邮箱')
-    # 密码
+    # 密码，Django哈希存储
     password = models.CharField(max_length=128, blank=True, verbose_name='密码')
-    # 姓名
+    # 用户姓名
     full_name = models.CharField(max_length=50, verbose_name='姓名')
 
-    # 角色与权限，默认为员工
+    # 一级角色
     role = models.CharField(
         max_length=20, 
         choices=ROLE_CHOICES, 
         default='member', 
         verbose_name='系统角色'
-        )
+    )
+    # 管理员细分类型
     role_type = models.CharField(
         max_length=20, 
         choices=ROLE_TYPE_CHOICES, 
         blank=True, default='', 
         verbose_name='管理员类型'
-        )
+    )
     
-    # 账号状态，默认不可用
+    # 账号状态，新建邀请用户默认待激活
     status = models.CharField(
         max_length=20, 
         choices=STATUS_CHOICES, 
-        default='pending',      # 待激活
+        default='pending',
         verbose_name='账号状态'
-        )
+    )
     
-    # 激活令牌，只用一次
+    # 激活令牌，邀请用户激活使用
     activation_token = models.CharField(max_length=64, blank=True, verbose_name='激活令牌')
     # 令牌过期时间
     activation_token_expires_at = models.DateTimeField(
         null=True, blank=True, 
         verbose_name='令牌过期时间'
-        )
-    # 邀请时间
+    )
+    # 邀请创建时间
     invited_at = models.DateTimeField(auto_now_add=True, verbose_name='邀请时间')
-    # 激活时间
+    # 用户激活时间
     activated_at = models.DateTimeField(null=True, blank=True, verbose_name='激活时间')
 
-    # 绑定自定义 Manager
+    # 绑定自定义Manager
     objects = UserManager()
 
-    # Django 认证系统需要的类属性
+    # Django认证体系配置
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
 
     def check_password(self, raw_password):
+        """校验明文密码和数据库哈希密码"""
         return django_check_password(raw_password, self.password)
 
     def set_password(self, raw_password):
+        """设置密码，自动哈希"""
         from django.contrib.auth.hashers import make_password
         self.password = make_password(raw_password)
 
     def get_username(self):
+        """Django auth 接口：返回登录标识"""
         return self.email
     
     def get_full_name(self):
+        """Django auth 接口：全名"""
         return self.full_name
     
     def get_short_name(self):
+        """Django auth 接口：简称复用全名"""
         return self.full_name
 
-    # 平台管理员拥有全部权限
     def has_perm(self, perm, obj=None):
+        """仅平台超管拥有全部权限"""
         if self.is_superuser:
             return True
         return False
 
-    # 平台管理员可以访问所有模块
     def has_module_perms(self, app_label):
+        """仅平台超管可访问所有模块"""
         if self.is_superuser:
             return True
         return False
 
-    # 实时查询 BannedEmail 表，判断当前邮箱是否被封禁
     @cached_property
     def is_banned(self):
+        """
+        判断邮箱是否在平台黑名单
+        同时匹配当前邮箱、原始邮箱，cached_property 缓存查询结果
+        """
         emails = [self.email]
         if self.original_email:
             emails.append(self.original_email)
@@ -192,26 +211,32 @@ class User(models.Model):
 
     @cached_property
     def is_active(self):
+        """账号是否可用：状态在职，并且没有被平台封禁"""
         return self.status == 'active' and not self.is_banned
 
     @property
     def is_anonymous(self):
+        """Django auth：不是匿名用户"""
         return False
 
     @property
     def is_authenticated(self):
+        """Django auth：已认证用户标记"""
         return True
 
     @property
     def is_staff(self):
+        """平台管理员标记：角色owner，不属于任何租户"""
         return self.role == 'owner' and self.tenant is None
 
     @property
     def is_superuser(self):
+        """平台超级管理员"""
         return self.is_staff
 
     @property
     def real_email(self):
+        """获取真实邮箱，优先原始邮箱，用于黑名单匹配"""
         return self.original_email or self.email
 
     class Meta:
@@ -222,13 +247,12 @@ class User(models.Model):
     def __str__(self):
         return f'{self.full_name}({self.get_role_display()})'
 
-# banned_emails 封禁邮箱表
 class BannedEmail(models.Model):
+    """平台封禁邮箱黑名单表，全局拦截"""
     email = models.EmailField(unique=True, verbose_name='被封禁的邮箱')
     banned_at = models.DateTimeField(auto_now_add=True, verbose_name='封禁时间')
     is_active = models.BooleanField(default=True, verbose_name='是否生效')
     unbanned_at = models.DateTimeField(null=True, blank=True, verbose_name='解封时间')
-
 
     class Meta:
         db_table = 'banned_emails'
@@ -242,8 +266,8 @@ class BannedEmail(models.Model):
             status = '已解封'
         return f'{self.email}（{status}）'
 
-# audit_logs 审计日志表
 class AuditLog(models.Model):
+    """审计日志表，记录关键敏感操作，不可删除修改"""
     ACTION_CHOICES = [
         ('assign_role', '委任角色'),
         ('resign', '离职'),

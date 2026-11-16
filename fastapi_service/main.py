@@ -7,12 +7,9 @@ from bm25_engine import get_bm25_engine, clear_bm25_engine
 import pymysql
 import json
 import redis
-from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, REDIS_HOST, REDIS_PORT, REDIS_DB
+from config import DB_HOST, DB_USER, DB_PASSWORD, DB_NAME, REDIS_HOST, REDIS_PORT, REDIS_DB, redis_client
 
 app = FastAPI(title="RAG 检索增强 API", version="1.0")
-
-# 初始化 Redis 客户端
-redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
 
 class ChatRequest(BaseModel):
     tenant_id: int
@@ -73,11 +70,6 @@ def stream_and_save(request: ChatRequest, contexts: list):
 
         # 保存到数据库
         save_chat_to_db(request, contexts, full_answer, usage_data)
-
-# # 测试接口
-# @app.get("/")
-# def read_root():
-#     return {"message": "FastAPI RAG 引擎已就绪"}
 
 # 混合检索 + 流式输出
 @app.post("/api/chat")

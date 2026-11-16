@@ -8,19 +8,28 @@ from django.db.models import Value, F
 
 logger = logging.getLogger(__name__)
 
-# 清理过期的待激活用户(最多重试 3 次)
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
 def clean_expired_invitations(self):
+    """
+    定时任务：清理已经过期的待激活邀请用户
+    - 状态 pending、激活时间已过期
+    - 把邮箱后缀加上 _expired_时间戳，避免后续重复邮箱冲突
+    - 清空激活token、修改状态为expired
+    - 失败最多自动重试3次，间隔10秒
+    """
     try:
+        # 懒导入，避免循环导入
         from .models import User
         now = timezone.now()
         timestamp = now.strftime('%Y%m%d%H%M%S')
         
-        # 直接用一条 SQL 在数据库层面完成所有修改
+        # 数据库批量更新（单条SQL，性能好，无N+1）
         count = User.objects.filter(
             status='pending',
             activation_token_expires_at__lt=now,
         ).update(
+            # 原邮箱拼接过期标记，防止新建邀请时邮箱唯一冲突
             email=Concat(F('email'), Value(f'_expired_{timestamp}')),
             status='expired',
             activation_token='',
@@ -31,11 +40,13 @@ def clean_expired_invitations(self):
 
     except Exception as exc:
         logger.error(f"清理任务失败: {exc}")
-        raise exc  # 抛出异常，Celery 自动拦截并触发重试机制
+        # 抛出异常 → Celery捕获，触发自动重试
+        raise exc
 
-# 邀请用户后 发送邀请邮件
+
 @shared_task
 def send_invite_email(email, inviter_name, company_name, token):
+    """异步发送用户邀请激活邮件"""
     activate_url = f'http://127.0.0.1:8000/api/accounts/activate/page/?token={token}'
 
     send_mail(
@@ -45,12 +56,13 @@ def send_invite_email(email, inviter_name, company_name, token):
                 f'链接 24 小时内有效，请及时激活。',
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[email],
-        fail_silently=False,
+        fail_silently=False,  # 发送失败会抛出异常，便于celery记录
     )
 
-# 委任角色后 发送通知邮件
+
 @shared_task
 def send_assign_role_email(email, full_name, old_role, new_role, company_name):
+    """异步发送角色变更通知邮件"""
     send_mail(
         subject='【知识库系统】您的职位已更新',
         message=f'{full_name} 您好，\n\n'
@@ -61,9 +73,10 @@ def send_assign_role_email(email, full_name, old_role, new_role, company_name):
         fail_silently=False,
     )
 
-# 注销公司后 给所有董事长发邮件
+
 @shared_task
 def send_tenant_cancel_email(owners, company_name):
+    """租户注销后，异步给所有负责人发送通知邮件"""
     for owner in owners:
         try:
             send_mail(
@@ -75,4 +88,5 @@ def send_tenant_cancel_email(owners, company_name):
                 fail_silently=False,
             )
         except Exception:
+            # 单个邮箱发送失败，不中断剩下的邮件发送
             continue

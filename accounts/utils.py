@@ -1,33 +1,26 @@
-import redis
-from django.conf import settings
+"""
+accounts/utils.py
+账号模块通用工具函数
+包含：邀请用户过期处理、角色中文映射、JWT令牌生成
+"""
+
+# Django 内置
 from django.utils import timezone
-from rest_framework.exceptions import PermissionDenied
+
+# 第三方库
 from rest_framework_simplejwt.tokens import RefreshToken
 
-# 全局 Redis 客户端
-redis_client = redis.Redis(
-    host=settings.REDIS_HOST,
-    port=settings.REDIS_PORT,
-    db=settings.REDIS_DB,
-    decode_responses=True
-)
 
-# 校验用户所属租户是否处于正常状态。
-def check_tenant_active(user):
-    
-    # 租户为正常使用状态有效
-    if user.tenant and user.tenant.status != 'active':
-        status_messages = {
-            'suspended': '所属公司服务已暂停，请联系企业管理员处理',
-            'banned': '所属公司已被封禁，请联系平台客服',
-            'cancelled': '所属公司已注销',
-        }
-        raise PermissionDenied(
-            status_messages.get(user.tenant.status, '所属公司状态异常，请联系平台客服')
-        )
-
-# 把待激活用户标记为 邀请过期，释放邮箱，清空令牌
 def expire_pending_user(user):
+    """
+    过期待激活的邀请用户
+    功能：邀请链接过期时，对用户做失效处理
+    逻辑：
+        1. 给原邮箱后缀加上时间戳，释放邮箱，避免新用户无法使用该邮箱注册
+        2. 修改用户状态为 expired（已过期）
+        3. 清空激活令牌、令牌过期时间
+        4. 只更新指定字段，减少数据库写入开销
+    """
     timestamp = timezone.now().strftime('%Y%m%d%H%M%S')
     user.email = f'{user.email}_expired_{timestamp}'
     user.status = 'expired'
@@ -37,8 +30,12 @@ def expire_pending_user(user):
         'email', 'status', 'activation_token', 'activation_token_expires_at'
     ])
 
-# 工具：将角色和角色类型翻译为完整的中文名称
+
 def get_role_full_name(role, role_type):
+    """
+    角色名称翻译工具
+    作用：将后端枚举的英文角色标识，转为前端展示用的中文角色名
+    """
     if role == 'owner':
         return '董事'
     elif role == 'admin':
@@ -51,25 +48,32 @@ def get_role_full_name(role, role_type):
         return '员工'
     return role
 
-# 统一生成带指纹和权限信息的 JWT Token
+
 def generate_jwt_tokens(user):
+    """
+    生成JWT令牌（Access + Refresh）
+    逻辑：
+        1. 基于simplejwt生成标准refresh token
+        2. 提取密码后8位指纹、角色、角色类型，注入到token的payload
+        3. AccessToken 和 RefreshToken 都携带权限信息
+        返回：(access_token, refresh_token)
+    备注：pwd_fp用于后续密码变更后，直接使旧token失效
+    """
     refresh = RefreshToken.for_user(user)
 
-    # 提取指纹和角色信息
+    # 提取密码指纹、角色信息
     pwd_fp = user.password[-8:] if user.password else ''
     role = user.role
     role_type = user.role_type
 
-    # 注入 Refresh Token
+    # 往Refresh Token载荷注入字段
     refresh['pwd_fp'] = pwd_fp
     refresh['role'] = role
     refresh['role_type'] = role_type
 
-    # 注入 Access Token
+    # 往Access Token载荷注入字段
     refresh.access_token['pwd_fp'] = pwd_fp
     refresh.access_token['role'] = role
     refresh.access_token['role_type'] = role_type
 
-    # 返回 (access_token, refresh_token)
     return str(refresh.access_token), str(refresh)
-

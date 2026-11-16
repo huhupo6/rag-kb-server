@@ -2,6 +2,7 @@
 import os
 
 # 2. 第三方
+import redis
 from dotenv import load_dotenv
 
 # 加载根目录的 .env 文件
@@ -17,6 +18,14 @@ DB_NAME = os.getenv('DB_NAME')
 REDIS_HOST = os.getenv('REDIS_HOST', 'redis')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
+
+# 全局单例 Redis 客户端
+redis_client = redis.Redis(
+    host=REDIS_HOST, 
+    port=REDIS_PORT, 
+    db=REDIS_DB, 
+    decode_responses=True
+)
 
 # Milvus 向量库配置
 MILVUS_URI = os.getenv("MILVUS_URI", "http://milvus-standalone:19530")

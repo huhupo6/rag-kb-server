@@ -1,20 +1,17 @@
-# 1. Python内置
-import random
 
-# 2. Django
+# 1. Django
 from django.db.models import Q
-from django.core.mail import send_mail
-from django.conf import settings
 
-# 3. DRF
+# 2. DRF
 from rest_framework.permissions import AllowAny
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
-# 4. 当前app自定义代码
-from .models import User, BannedEmail
-from .utils import redis_client, check_tenant_active, generate_jwt_tokens
+# 3. 当前app自定义代码
+from .models import User
+from common.permissions import check_tenant_active
+from .utils import generate_jwt_tokens
 from .serializers import (
     SendCodeSerializer,
     RegisterSerializer,
@@ -30,26 +27,27 @@ from .serializers import (
     ResetPasswordSerializer,
 )
 
-# 企业注册-发送验证码 接口
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def send_verification_code(request):
+    """企业注册：发送邮箱验证码接口，无需登录"""
     serializer = SendCodeSerializer(data=request.data)
     if serializer.is_valid():
         serializer.save()
         return Response({'message': '验证码已发送，请查收邮箱'})
     return Response(serializer.errors, status=400)
 
-# 企业注册 接口
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register(request):
+    """企业账号注册接口，注册成功自动生成JWT令牌"""
     serializer = RegisterSerializer(data=request.data)
 
     if serializer.is_valid():
         user = serializer.save()
-
-        # 统一调用工具函数生成 Token
+        # 调用工具函数生成 access_token、refresh_token
         access_token, refresh_token = generate_jwt_tokens(user)
 
         return Response({
@@ -65,19 +63,19 @@ def register(request):
             'refresh': refresh_token,
         }, status=201)
 
-    # 校验失败，返回错误信息
+    # 参数校验失败返回错误信息
     return Response(serializer.errors, status=400)
 
-# 统一登录 接口
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login(request):
+    """账号登录接口，校验通过返回JWT令牌"""
     serializer = LoginSerializer(data=request.data)
 
     if serializer.is_valid():
         user = serializer.validated_data['user']
-
-        # 统一调用工具函数生成 Token
+        # 调用工具函数生成 access_token、refresh_token
         access_token, refresh_token = generate_jwt_tokens(user)
 
         return Response({
@@ -95,48 +93,52 @@ def login(request):
             'refresh': refresh_token,
         }, status=200)
 
-    # 校验失败，返回错误信息
+    # 账号密码校验失败返回错误信息
     return Response(serializer.errors, status=400)
 
-# 人员列表展示 API
+
 @api_view(['GET'])
 def list_users(request):
-    # 1. 校验租户状态
+    """
+    租户人员列表接口
+    权限：仅董事(owner)、HR管理员可访问
+    支持：姓名/邮箱模糊搜索、分页，按邀请时间倒序
+    """
+    # 校验租户是否处于可用状态
     check_tenant_active(request.user)
 
-    # 2. 权限校验：只有董事和 HR 才能访问人员管理列表
+    # 权限判断：董事 或者 HR管理员
     is_owner = request.user.role == 'owner'
     is_hr = request.user.role == 'admin' and request.user.role_type == 'hr'
     if not (is_owner or is_hr):
         return Response({'error': '您没有权限查看人员列表'}, status=403)
 
-    # 3. 基础查询
+    # 只查询当前租户下的用户
     queryset = User.objects.filter(tenant=request.user.tenant)
-    
-    # 4. 支持前端模糊搜索（按姓名或邮箱）
+
+    # 前端传搜索关键词，模糊匹配姓名、邮箱
     search_keyword = request.query_params.get('search', '').strip()
     if search_keyword:
         queryset = queryset.filter(
             Q(full_name__icontains=search_keyword) | Q(email__icontains=search_keyword)
         )
-        
-    # 5. 按邀请时间倒序
+
+    # 按邀请时间倒序展示
     queryset = queryset.order_by('-invited_at')
 
-    # 6. 分页处理（每页 20 条）
+    # 分页配置，每页20条
     paginator = PageNumberPagination()
     paginator.page_size = 20
     paginated_users = paginator.paginate_queryset(queryset, request)
 
     serializer = UserListSerializer(paginated_users, many=True, context={'request': request})
-    
     return paginator.get_paginated_response(serializer.data)
 
-# 董事邀请员工、HR、法务 / HR邀请员工 接口
+
 @api_view(['POST'])
 def invite(request):
+    """董事/HR邀请新成员接口，生成待激活用户并发送邀请邮件"""
     request_user = User.objects.select_related("tenant").get(pk=request.user.pk)
-    
     request.user = request_user
 
     serializer = InviteSerializer(data=request.data, context={'request': request})
@@ -154,19 +156,21 @@ def invite(request):
         }, status=201)
     return Response(serializer.errors, status=400)
 
-# 激活账号 接口
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def activate(request):
+    """邀请链接激活账号接口，设置密码，无需登录"""
     serializer = ActivateSerializer(data=request.data)
     if serializer.is_valid():
         serializer.save()
         return Response({'message': '激活成功，请前往登录'}, status=200)
     return Response(serializer.errors, status=400)
 
-# 角色委任 接口
+
 @api_view(['POST'])
 def assign_role(request):
+    """角色委任接口，修改租户内用户角色，异步发送角色变更通知邮件"""
     serializer = AssignRoleSerializer(data=request.data, context={'request': request})
     if serializer.is_valid():
         target = serializer.save()
@@ -182,9 +186,10 @@ def assign_role(request):
         }, status=200)
     return Response(serializer.errors, status=400)
 
-# 员工离职 接口
+
 @api_view(['POST'])
 def resign_user(request):
+    """HR/董事操作员工离职接口，变更用户状态、释放邮箱"""
     serializer = ResignUserSerializer(data=request.data, context={'request': request})
     if serializer.is_valid():
         target = serializer.save()
@@ -198,9 +203,10 @@ def resign_user(request):
         }, status=200)
     return Response(serializer.errors, status=400)
 
-# 董事离职 接口
+
 @api_view(['POST'])
 def self_resign(request):
+    """董事自主离职接口"""
     serializer = SelfResignSerializer(data=request.data, context={'request': request})
     if serializer.is_valid():
         user = serializer.save()
@@ -214,9 +220,10 @@ def self_resign(request):
         }, status=200)
     return Response(serializer.errors, status=400)
 
-# 董事注销公司 接口
+
 @api_view(['POST'])
 def cancel_tenant(request):
+    """董事注销整个租户（公司）接口，注销后发送通知邮件给负责人"""
     serializer = CancelTenantSerializer(data=request.data, context={'request': request})
     if serializer.is_valid():
         tenant = serializer.save()
@@ -230,20 +237,22 @@ def cancel_tenant(request):
         }, status=200)
     return Response(serializer.errors, status=400)
 
-# 用户忘记密码-发送验证码 接口
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def forgot_password(request):
+    """忘记密码：发送重置验证码接口，无需登录"""
     serializer = ForgotPasswordSerializer(data=request.data)
     if serializer.is_valid():
         serializer.save()
         return Response({'message': '验证码已发送，请查收'})
     return Response(serializer.errors, status=400)
 
-# 用户忘记密码-重置密码 接口
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def reset_password(request):
+    """忘记密码：验证码校验+重置密码接口，无需登录"""
     serializer = ResetPasswordSerializer(data=request.data)
     if serializer.is_valid():
         serializer.save()

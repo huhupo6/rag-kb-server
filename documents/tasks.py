@@ -1,11 +1,18 @@
+# 1. Python 内置
 import os
 import logging
+
+# 2. 第三方库
 import requests
+from celery import shared_task
+
+# 3. Django
 from django.conf import settings
 from django.utils import timezone
 from django.db import transaction
 from django.db.models import Q
-from celery import shared_task
+
+# 4. 当前app自定义模块
 from .models import Document, DocumentChunk
 from .services.parser_factory import get_parser
 from .services.cleaners import clean_markdown
@@ -14,69 +21,79 @@ from .services.clients import get_milvus_client, embedding_client
 
 logger = logging.getLogger(__name__)
 
-# 异步解析文档
+
 @shared_task
 def parse_document(doc_id):
-    # 尝试拿到原文件
+    """
+    Celery异步任务：文档解析、文本清洗、分块、分片入库、向量化（Pro套餐）
+    执行流程：
+        1. 获取文档记录，状态改为 parsing（解析中）
+        2. MinerU解析文件 → Markdown清洗 → 带跨页表格保护策略切分chunk
+        3. 事务内：删除该文档旧分片，批量写入新DocumentChunk
+        4. 套餐分支：
+            - free：仅写入MySQL，content_tokenized用于MySQL全文检索，跳过向量化
+            - pro：额外调用Embedding生成向量写入Milvus，自动清理版本链旧向量，通知FastAPI刷新BM25缓存
+    状态流转：pending → parsing → parsed / failed
+    """
     try:
         doc = Document.objects.get(id=doc_id)
-
     except Document.DoesNotExist:
         return f'Document {doc_id} 不存在'
 
-    # 拿到文件状态改为解析中
+    # 修改文档状态：解析中
     doc.status = 'parsing'
     doc.save(update_fields=['status'])
 
     try:
+        # 拼接文件完整物理路径
         full_path = os.path.join(settings.MEDIA_ROOT, doc.file_path)
-        
-        # 获取后缀
+        # 获取文件后缀，统一小写
         suffix = os.path.splitext(full_path)[1].lower()
 
+        # 按文件类型获取解析器（底层MinerU，支持PDF/DOCX跨页表格识别合并）
         parser = get_parser(suffix)
         raw_text = parser.parse(full_path)
+        # 清洗Markdown多余标签、脏格式
         text = clean_markdown(raw_text)
 
-        # 分块
+        # 文档分块：splitters，带表格整体保护，避免跨页表格被切碎
         chunks = split_into_chunks(text)
-
         if not chunks:
             raise ValueError("文档内容为空，未提取到任何有效文本")
 
         chunk_objects = []
-        # 逐块分词 + 写入
         for idx, chunk in enumerate(chunks):
             chunk_objects.append(
                 DocumentChunk(
                     document=doc,
                     content=chunk,
+                    # 分词：和检索查询侧共用同一套tokenize函数，解决分词不一致召回失败bug
                     content_tokenized=tokenize_chunk(chunk),
                     chunk_index=idx,
                 )
             )
 
+        # 数据库事务：保证分片原子更新，要么全部更新成功，要么回滚
         with transaction.atomic():
-            # 先删除该文档已经存在的旧分片
+            # 删除当前文档历史旧分片
             DocumentChunk.objects.filter(document=doc).delete()
-
-            # 批量插入
+            # 批量插入新分片，减少IO
             DocumentChunk.objects.bulk_create(chunk_objects)
-
-            # 更新状态为成功
+            # 更新文档状态为解析成功，记录解析完成时间
             doc.status = 'parsed'
             doc.parsed_at = timezone.now()
             doc.save(update_fields=['status', 'parsed_at'])
 
-        # 向量化并写入 Milvus
+        # ========== Pro套餐专属逻辑：向量化写入Milvus向量库 ==========
         if doc.tenant.plan_type == 'pro':
             try:
                 milvus_client = get_milvus_client()
-                
-                if milvus_client:
+                if not milvus_client:
+                    logger.warning(f"[{doc_id}] Milvus 客户端不可用，跳过向量化")
+                else:
+                    # 每个租户独立Milvus集合，实现租户数据隔离
                     collection_name = f"tenant_{doc.tenant_id}"
-                    
-                    # 1. 检查并创建集合
+                    # 集合不存在则新建，向量维度1024，内积IP相似度
                     if collection_name not in milvus_client.list_collections():
                         milvus_client.create_collection(
                             collection_name=collection_name,
@@ -86,27 +103,23 @@ def parse_document(doc_id):
                             max_length=65535
                         )
                         logger.info(f"新建 Milvus 集合: {collection_name}")
-                    
-                    # 清理同一版本链下历史旧版本的向量数据
-                    root_id = doc.parent_doc_id or doc.id
 
-                    # 查找该版本树下，除了当前 doc 以外的所有历史版本 ID
+                    # 版本链清理：找到根文档，删除同版本链下旧版本的向量，只保留最新版向量
+                    root_id = doc.parent_doc_id or doc.id
                     old_versions = Document.objects.filter(
                         Q(id=root_id) | Q(parent_doc_id=root_id),
                         tenant=doc.tenant
                     ).exclude(id=doc.id).values_list('id', flat=True)
-
                     old_doc_ids = list(old_versions)
 
                     if old_doc_ids:
-                        # 使用 Milvus 的标量过滤删除旧向量
                         milvus_client.delete(
                             collection_name=collection_name,
                             filter=f"document_id in {old_doc_ids}"
                         )
                         logger.info(f"[{doc_id}] 已清理历史旧版本向量数据，旧文档 ID: {old_doc_ids}")
 
-                    # 2. 提取新文本，调用智谱 API 向量化
+                    # 批量调用智谱Embedding接口，生成向量，分批调用避免超限
                     texts = [chunk.content for chunk in chunk_objects]
                     all_vectors = []
                     batch_size = 20
@@ -120,41 +133,37 @@ def parse_document(doc_id):
                         batch_vectors = [data.embedding for data in response.data]
                         all_vectors.extend(batch_vectors)
 
-                    # 3. 组装并插入新版本的向量到 Milvus
+                    # 组装向量数据写入Milvus
                     data_to_insert = []
                     for i, chunk in enumerate(chunk_objects):
                         data_to_insert.append({
-                            "id": f"{doc.id}_{chunk.chunk_index}", 
+                            "id": f"{doc.id}_{chunk.chunk_index}",
                             "vector": all_vectors[i],
                             "text": chunk.content,
                             "document_id": doc.id
                         })
-                    
                     milvus_client.insert(collection_name=collection_name, data=data_to_insert)
                     logger.info(f"[{doc_id}] 专业版租户：成功将 {len(texts)} 个向量写入 Milvus")
-                else:
-                    logger.warning(f"[{doc_id}] Milvus 客户端不可用，跳过向量化")
-                
             except Exception as e:
                 logger.error(f"[{doc_id}] 写入 Milvus 失败: {str(e)}", exc_info=True)
         else:
-            # 轻量版跳过向量化
+            # Free轻量版：不需要向量，只依赖MySQL全文检索
             logger.info(f"[{doc_id}] 轻量版租户：跳过向量化入库，仅保留 MySQL 全文索引")
 
-        # 通知 FastAPI 清理缓存
-        try:
-            if doc.tenant.plan_type == 'pro':
+        # Pro套餐：通知FastAPI检索微服务，清空该租户BM25内存缓存，防止读到过期分片
+        if doc.tenant.plan_type == 'pro':
+            try:
                 fastapi_url = os.getenv("FASTAPI_URL", "http://fastapi-app:9000")
                 refresh_url = f"{fastapi_url}/api/refresh_cache?tenant_id={doc.tenant_id}"
                 requests.post(refresh_url, timeout=3)
                 logger.info(f"[{doc_id}] 已通知 FastAPI 清理 BM25 缓存")
-        except Exception as e:
-            logger.warning(f"[{doc_id}] 通知 FastAPI 清理缓存失败: {e}")
+            except Exception as e:
+                logger.warning(f"[{doc_id}] 通知 FastAPI 清理缓存失败: {e}")
 
         return f'解析成功，共 {len(chunks)} 个块'
-    
-    # 解析失败 
+
     except Exception as e:
+        # 全局异常捕获：标记文档解析失败，记录错误信息
         logger.error(f"文档解析失败 ID:{doc_id} - {str(e)}", exc_info=True)
         doc.status = 'failed'
         doc.error_message = str(e)[:500]
