@@ -5,6 +5,7 @@ import logging
 # 2. 第三方库
 import requests
 from celery import shared_task
+from celery.exceptions import MaxRetriesExceededError
 
 # 3. Django
 from django.conf import settings
@@ -22,8 +23,8 @@ from .services.clients import get_milvus_client, embedding_client
 logger = logging.getLogger(__name__)
 
 
-@shared_task
-def parse_document(doc_id):
+@shared_task(bind=True, max_retries=3, default_retry_delay=10)
+def parse_document(self, doc_id):
     """
     Celery异步任务：文档解析、文本清洗、分块、分片入库、向量化（Pro套餐）
     执行流程：
@@ -162,10 +163,16 @@ def parse_document(doc_id):
 
         return f'解析成功，共 {len(chunks)} 个块'
 
-    except Exception as e:
+    except requests.exceptions.RequestException as exc:
+        # MinerU 微服务抖动或超时，触发 Celery 自动重试
+        logger.warning(f"文档 {doc_id} 解析遇到网络异常，准备重试: {exc}")
+        raise self.retry(exc=exc)
+
+    except Exception as exc:
         # 全局异常捕获：标记文档解析失败，记录错误信息
-        logger.error(f"文档解析失败 ID:{doc_id} - {str(e)}", exc_info=True)
+        logger.error(f"文档 {doc_id} 解析彻底失败: {exc}", exc_info=True)
         doc.status = 'failed'
-        doc.error_message = str(e)[:500]
+        doc.error_message = str(exc)[:500]
         doc.save(update_fields=['status', 'error_message'])
-        return f'解析失败: {str(e)}'
+        # 抛出异常，触发 RabbitMQ 的死信机制 (x-dead-letter-exchange)
+        raise exc

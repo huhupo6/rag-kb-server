@@ -38,8 +38,14 @@ COPY requirements.txt /app/
 RUN pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/ \
     && pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
 
-# 复制当前目录所有项目代码到容器内 /app
-COPY . /app/
+# 逐个复制Django业务代码
+COPY accounts ./accounts
+COPY chat ./chat
+COPY common ./common
+COPY documents ./documents
+COPY kb_project ./kb_project
+COPY kb_tokenizer ./kb_tokenizer
+COPY manage.py .
 
 # 声明容器内部对外提供服务的端口
 EXPOSE 8000

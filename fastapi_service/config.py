@@ -37,3 +37,7 @@ EMBEDDING_BASE_URL = os.getenv("EMBEDDING_BASE_URL", "https://open.bigmodel.cn/a
 # DeepSeek LLM 配置
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+
+# Rerank 微服务配置
+RERANK_URL = os.getenv("RERANK_URL", "http://rerank-service:8000/rerank")
+RERANK_TIMEOUT = int(os.getenv("RERANK_TIMEOUT", "20"))

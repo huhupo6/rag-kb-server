@@ -1,9 +1,6 @@
-# docker-compose-mineru.yml
-# MinerU 文档解析微服务编排文件
-# 独立部署，供 RAG 知识库主系统通过 HTTP API 调用
-# 功能：PDF / DOCX 解析、布局识别、公式提取，输出 Markdown
-
-version: '3.5'
+# docker-compose-milvus.yml
+# Milvus 向量数据库编排文件
+# 独立部署，供 RAG 知识库主系统通过内部网络调用
 
 services:
   etcd:
@@ -22,6 +19,8 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    networks:
+      - kb_network
 
   minio:
     container_name: milvus-minio
@@ -40,6 +39,8 @@ services:
       interval: 30s
       timeout: 20s
       retries: 3
+    networks:
+      - kb_network
 
   standalone:
     container_name: milvus-standalone
@@ -65,3 +66,11 @@ services:
     depends_on:
       - "etcd"
       - "minio"
+    networks:
+      - kb_network
+
+# 声明使用外部网络（由主 docker-compose.yml 创建）
+networks:
+  kb_network:
+    external: true
+   

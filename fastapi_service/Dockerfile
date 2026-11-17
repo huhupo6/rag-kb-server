@@ -20,13 +20,25 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources && \
     echo "deb http://mirrors.aliyun.com/debian-security/ bookworm-security main" >> /etc/apt/sources.list && \
     echo "deb http://mirrors.aliyun.com/debian/ bookworm-updates main non-free non-free-firmware contrib" >> /etc/apt/sources.list
 
-# 复制依赖文件并安装
-COPY requirements.txt /app/
-RUN pip install --upgrade pip -i https://mirrors.aliyun.com/pypi/simple/ \
-    && pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+# 先把本地的 torch 压缩包复制进容器
+COPY fastapi_service/torch-2.1.2+cpu-cp311-cp311-linux_x86_64.whl /app/
 
-# 复制当前目录所有代码
-COPY . /app/
+# 优先安装本地 torch 文件
+RUN pip install --no-cache-dir /app/torch-2.1.2+cpu-cp311-cp311-linux_x86_64.whl
+
+# 复制剩下的依赖清单
+COPY fastapi_service/requirements.txt /app/
+# 使用腾讯云镜像
+RUN pip install --no-cache-dir -r requirements.txt \
+    -i https://mirrors.cloud.tencent.com/pypi/simple \
+    --timeout 120 \
+    --retries 5
+    
+# 复制公共分词包
+COPY kb_tokenizer /app/kb_tokenizer
+
+# 只复制 FastAPI 的代码到 /app 下
+COPY fastapi_service /app/
 
 # 暴露 FastAPI 服务的端口
 EXPOSE 9000

@@ -1,29 +1,28 @@
-# .dockerignore
-# Docker 构建忽略清单
-# 作用：执行 docker build 时，下面这些文件/目录不会被 COPY 打包进镜像
-# 和 .gitignore 相互独立，只影响镜像构建，不控制 Git 提交
+# ==========================================
+# .dockerignore - Docker 构建忽略清单
+# ==========================================
 
-# Python虚拟环境，不打包进镜像
+# 1. 虚拟环境与缓存
 venv/
-
-# git仓库目录不需要打进镜像
 .git/
-
-# 本地环境变量
-.env
-
-# Python字节码缓存
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.log
 
-# sqlite本地数据库
+# 2. 敏感环境变量
+.env
+
+# 3. 本地数据库与媒体文件（由 Docker Volume 管理）
 db.sqlite3
-
-# 用户上传的媒体资源
 media/
-
-# 文档图片资源
 docs/images/
 
-# 日志文件
-*.log
+# 4. 庞大的模型文件与数据卷
+models/           # BGE Reranker 模型
+mineru_models/    # MinerU 模型
+volumes/          # Milvus / etcd / minio 持久化数据
+
+# 5. 测试与评测目录
+eval/

@@ -1,30 +1,62 @@
-# .gitignore
-# Git 提交忽略清单
-# 作用：git add / git commit 的时候，忽略下面这些文件，不上传到远程仓库
-
+# ====================== Python 基础忽略 ======================
 # 虚拟环境
 venv/
+.venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
 
-# 环境变量与敏感信息
+# ====================== 敏感配置文件 ======================
 .env
 *.env
+.env.local
+.env.dev
+.env.prod
 
-# 数据库与日志
-db.sqlite3
+# ====================== 数据库、日志、临时文件 ======================
 *.log
-
-# 用户上传的媒体文件
+logs/
+db.sqlite3
+db.sqlite3-journal
 media/
+uploads/
+tmp/
+temp/
 
-# celery 持久化调度文件
+# Celery 调度文件
 celerybeat-schedule
 celerybeat-schedule.*
 
-# vscode本地配置（可选，推荐加上）
-.vscode/
-
-mineru_models/
-
+# ====================== Docker 挂载目录（volumes） ======================
 volumes/
+
+# ====================== 模型文件 ======================
+# Rerank、Embedding、MinerU模型
+models/
+mineru_models/
+models/**/*.bin
+models/**/*.safetensors
+models/**/*.lock
+*.whl
+*.zip
+*.tar.gz
+
+# ====================== IDE 本地配置 ======================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# ====================== 其他运行时产物 ======================
+*.tmp
+*.cache
+hf_cache/

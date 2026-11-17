@@ -1,6 +1,7 @@
 # 1. Python 内置
 import json
 import datetime
+import traceback
 
 # 2. 第三方
 from fastapi import FastAPI, HTTPException
@@ -40,6 +41,7 @@ def save_chat_to_db(request: ChatRequest, contexts: list, answer: str, usage: di
     :param answer: 大模型返回的回答文本
     :param usage: token消耗统计字典（prompt/completion/total）
     """
+    conn = None
     try:
         # 提取引用的chunk_id，转为json字符串存入数据库
         cited_ids = [str(c['chunk_id']) for c in contexts]
@@ -64,9 +66,12 @@ def save_chat_to_db(request: ChatRequest, contexts: list, answer: str, usage: di
                 usage.get('total_tokens', 0)
             ))
             conn.commit()
-        conn.close()
     except Exception as e:
         print(f"Pro 版写入 MySQL 失败: {e}")
+        traceback.print_exc()
+    finally:
+        if conn:
+            conn.close()
 
 
 def stream_and_save(request: ChatRequest, contexts: list):
@@ -97,11 +102,11 @@ def stream_and_save(request: ChatRequest, contexts: list):
             redis_key = f"tenant_token_usage:{request.tenant_id}:{today_str}"
             pipe = redis_client.pipeline()
             pipe.incrby(redis_key, total_tokens)
-            pipe.expire(redis_key, 86400)
+            pipe.expire(redis_key, 86400, nx=True)
             pipe.execute()
 
-        # 保存本次问答记录到数据库
-        save_chat_to_db(request, contexts, full_answer, usage_data)
+            # 保存本次问答记录到数据库
+            save_chat_to_db(request, contexts, full_answer, usage_data)
 
 
 @app.post("/api/chat")
@@ -124,6 +129,9 @@ async def chat_with_rag(request: ChatRequest):
 
         # 执行混合检索（BM25 + 向量检索，RRF融合排序）
         contexts = hybrid_search(request.query, request.tenant_id, top_k=3)
+        # 保护：检索为空也允许继续走LLM（无知识库兜底回答）
+        if not isinstance(contexts, list):
+            contexts = []
 
         # 返回SSE流式响应，内部自动收集答案、保存记录
         return StreamingResponse(
@@ -133,6 +141,8 @@ async def chat_with_rag(request: ChatRequest):
     except HTTPException as he:
         raise he
     except Exception as e:
+        print("==== /api/chat 异常堆栈 ====")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -147,6 +157,8 @@ def refresh_cache(tenant_id: int):
         clear_bm25_engine(tenant_id)
         return {"code": 200, "message": f"租户 {tenant_id} 的缓存已刷新"}
     except Exception as e:
+        print("==== /api/refresh_cache 异常堆栈 ====")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -169,6 +181,9 @@ def chat_test(request: ChatRequest):
 
         # 混合检索召回文档片段
         contexts = hybrid_search(request.query, request.tenant_id, top_k=3)
+        if not isinstance(contexts, list):
+            contexts = []
+
         # 同步调用大模型，一次性拿到答案和token消耗
         answer, usage_data = generate_sync(request.query, contexts)
 
@@ -176,7 +191,7 @@ def chat_test(request: ChatRequest):
         if total_tokens > 0:
             pipe = redis_client.pipeline()
             pipe.incrby(redis_key, total_tokens)
-            pipe.expire(redis_key, 86400)
+            pipe.expire(redis_key, 86400, nx=True)
             pipe.execute()
 
         # 问答记录入库
@@ -191,4 +206,6 @@ def chat_test(request: ChatRequest):
     except HTTPException as he:
         raise he
     except Exception as e:
+        print("==== /api/chat_test 异常堆栈 ====")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
