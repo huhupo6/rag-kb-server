@@ -1,9 +1,10 @@
 # 内置标准库
 import os
 import zipfile
-import fitz
+import pymupdf as fitz
 import logging
 import re
+import hashlib
 
 # Django
 from django.conf import settings
@@ -33,6 +34,7 @@ def save_uploaded_file(file_obj, doc_id):
     - 使用 basename 剥离危险路径前缀，防御路径穿越
     - 使用文档 ID 嵌入文件名，避免同名文件互相覆盖
     - 自动创建存储目录，分块写入大文件，减少内存压力
+    - 流式计算 SHA256，用于后续秒传去重
     :param file_obj: DRF 上传文件对象
     :param doc_id: 文档主键，用于生成唯一文件名
     :return: relative_path(相对存储路径), full_path(磁盘绝对路径)
@@ -61,14 +63,20 @@ def save_uploaded_file(file_obj, doc_id):
     # 递归创建文件夹，目录已经存在也不会报错（exist_ok=True）
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
 
+    # 初始化 SHA256 哈希对象
+    sha256_hash = hashlib.sha256()
+
     # 二进制写入模式打开文件
     with open(full_path, 'wb+') as f:
         # DRF的文件对象分块迭代写入，不会一次性把整个大文件加载进内存，适合大文件上传
         for chunk in file_obj.chunks():
             f.write(chunk)
+            sha256_hash.update(chunk)
 
-    # 返回三个值：相对路径（存数据库）、磁盘绝对路径（程序读取用）、清洗后的文件名（展示给前端）
-    return relative_path, full_path, safe_name
+    file_hash = sha256_hash.hexdigest()
+
+    # 返回三个值：相对路径（存数据库）、磁盘绝对路径（程序读取用）、清洗后的文件名（展示给前端）、文件哈希
+    return relative_path, full_path, safe_name, file_hash
 
 # 全新文档上传序列化器
 class DocumentUploadSerializer(serializers.Serializer):
@@ -210,11 +218,25 @@ class DocumentUploadSerializer(serializers.Serializer):
                 )
 
                 # 调用文件保存函数，拿到清洗后的文件名、相对路径、绝对路径
-                relative_path, full_path, safe_name = save_uploaded_file(validated_data['file'], doc.id)
+                relative_path, full_path, safe_name, file_hash = save_uploaded_file(validated_data['file'], doc.id)
+                # 租户秒传去重校验
+                existing_doc = Document.objects.filter(
+                    tenant=user.tenant,
+                    file_hash=file_hash,
+                    is_current=True,
+                    is_deleted=False
+                ).exclude(id=doc.id).first()
+
+                if existing_doc:
+                    if os.path.exists(full_path):
+                        os.remove(full_path)
+                    raise serializers.ValidationError(f"该文件已存在（文档名：{existing_doc.file_name}），请勿重复上传。")
+
                 # 回填清洗后的文件名和存储路径
                 doc.file_name = safe_name
                 doc.file_path = relative_path
-                doc.save(update_fields=['file_name', 'file_path'])
+                doc.file_hash = file_hash
+                doc.save(update_fields=['file_name', 'file_path', 'file_hash'])
 
                 # 事务提交成功之后，投递Celery异步任务
                 # 避免回滚后出现无效任务
@@ -266,43 +288,43 @@ class DocumentNewVersionSerializer(serializers.Serializer):
             if not match:
                 raise serializers.ValidationError(f"文件后缀与真实内容不匹配，禁止上传伪装的 {ext} 文件")
 
-            # 损坏 / 加密文件预检
-            try:
-                if ext == '.pdf':
-                    doc = fitz.open(stream=value, filetype="pdf")
-                    if doc.is_encrypted:
-                        raise serializers.ValidationError("该 PDF 文件已加密，请解除密码后上传")
-                    doc.close()
-                elif ext == '.docx':
-                    with zipfile.ZipFile(value) as z:
-                        bad_file = z.testzip()
-                        if bad_file is not None:
-                            raise serializers.ValidationError("DOCX 文件已损坏或格式不完整")
-                elif ext == '.txt':
-                    # TXT 预检：防空文件、编码异常、二进制伪装
-                    head_bytes = value.read(4096)
-                    if not head_bytes.strip():
-                        raise serializers.ValidationError("TXT 文件内容为空，无法解析")
-    
-                    is_valid_text = False
-                    for encoding in ['utf-8', 'gbk', 'gb18030']:
-                        try:
-                            decoded_str = head_bytes.decode(encoding)
-                            control_chars = sum(1 for c in decoded_str if ord(c) < 32 and c not in '\n\r\t')
-                            if control_chars > len(decoded_str) * 0.05:
-                                continue
-                            is_valid_text = True
-                            break
-                        except UnicodeDecodeError:
+        # 损坏 / 加密文件预检
+        try:
+            if ext == '.pdf':
+                doc = fitz.open(stream=value, filetype="pdf")
+                if doc.is_encrypted:
+                    raise serializers.ValidationError("该 PDF 文件已加密，请解除密码后上传")
+                doc.close()
+            elif ext == '.docx':
+                with zipfile.ZipFile(value) as z:
+                    bad_file = z.testzip()
+                    if bad_file is not None:
+                        raise serializers.ValidationError("DOCX 文件已损坏或格式不完整")
+            elif ext == '.txt':
+                # TXT 预检：防空文件、编码异常、二进制伪装
+                head_bytes = value.read(4096)
+                if not head_bytes.strip():
+                    raise serializers.ValidationError("TXT 文件内容为空，无法解析")
+
+                is_valid_text = False
+                for encoding in ['utf-8', 'gbk', 'gb18030']:
+                    try:
+                        decoded_str = head_bytes.decode(encoding)
+                        control_chars = sum(1 for c in decoded_str if ord(c) < 32 and c not in '\n\r\t')
+                        if control_chars > len(decoded_str) * 0.05:
                             continue
-                    if not is_valid_text:
-                        raise serializers.ValidationError("TXT 文件编码异常或疑似二进制文件伪装，请检查文件内容")
-            except serializers.ValidationError as e:
-                raise e
-            except Exception:
-                raise serializers.ValidationError("文件校验失败，可能已损坏")
-            finally:
-                value.seek(0)
+                        is_valid_text = True
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                if not is_valid_text:
+                    raise serializers.ValidationError("TXT 文件编码异常或疑似二进制文件伪装，请检查文件内容")
+        except serializers.ValidationError as e:
+            raise e
+        except Exception:
+            raise serializers.ValidationError("文件校验失败，可能已损坏")
+        finally:
+            value.seek(0)
         
         return value
 
@@ -339,10 +361,17 @@ class DocumentNewVersionSerializer(serializers.Serializer):
                 )
 
                 # 调用保存函数，拿到清洗后的文件名、路径
-                relative_path, full_path, safe_name = save_uploaded_file(validated_data['file'], new_doc.id)                     
+                relative_path, full_path, safe_name, file_hash = save_uploaded_file(validated_data['file'], new_doc.id)
+                # 版本链去重校验
+                if old_doc.file_hash == file_hash:
+                    if os.path.exists(full_path):
+                        os.remove(full_path)
+                    raise serializers.ValidationError("新版本文件与原文件内容完全相同，无需更新。")
+                
                 new_doc.file_path = relative_path
                 new_doc.file_name = safe_name
-                new_doc.save(update_fields=['file_path', 'file_name'])
+                new_doc.file_hash = file_hash
+                new_doc.save(update_fields=['file_path', 'file_name', 'file_hash'])
 
                 # 事务提交后 发起解析任务
                 transaction.on_commit(lambda: parse_document.delay(new_doc.id))

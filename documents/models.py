@@ -30,6 +30,14 @@ class Document(models.Model):
     file_name = models.CharField(max_length=255, verbose_name='文件名')
     file_path = models.CharField(max_length=500, verbose_name='文件存储路径')
 
+    # 文件SHA256哈希值，用于秒传与去重
+    file_hash = models.CharField(
+        max_length=64, 
+        blank=True, 
+        default='', 
+        verbose_name='文件SHA256哈希'
+    )
+
     # 版本链核心字段
     version = models.IntegerField(default=1, verbose_name='版本号')
     parent_doc_id = models.IntegerField(null=True, blank=True, verbose_name='根文档ID')
@@ -57,6 +65,8 @@ class Document(models.Model):
             models.Index(fields=['tenant', 'is_current', 'is_deleted', 'uploaded_at'], name='doc_list_idx'),
             # 同一个根文档的全部历史版本查询
             models.Index(fields=['tenant', 'parent_doc_id', 'is_deleted', 'version'], name='doc_version_idx'),
+            # 秒传去重联合索引
+            models.Index(fields=['tenant', 'file_hash'], name='doc_hash_idx'),
         ]
 
     def __str__(self):
