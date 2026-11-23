@@ -73,6 +73,13 @@ def save_uploaded_file(file_obj, doc_id):
             f.write(chunk)
             sha256_hash.update(chunk)
 
+    # 写入完整性校验：真实磁盘大小 vs 前端声明大小
+    actual_size = os.path.getsize(full_path)
+    expected_size = file_obj.size
+    if actual_size != expected_size:
+        # 抛出异常
+        raise ValueError(f"文件写入不完整：期望 {expected_size} 字节，实际落盘 {actual_size} 字节")
+
     file_hash = sha256_hash.hexdigest()
 
     # 返回三个值：相对路径（存数据库）、磁盘绝对路径（程序读取用）、清洗后的文件名（展示给前端）、文件哈希
