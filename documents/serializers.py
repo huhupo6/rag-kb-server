@@ -1,5 +1,7 @@
 # 内置标准库
 import os
+import zipfile
+import fitz
 import logging
 import re
 
@@ -101,7 +103,7 @@ class DocumentUploadSerializer(serializers.Serializer):
             try:
                 # 读取前 8 字节，足够判断文件头
                 header = value.read(8)
-                # 【关键】指针必须归位，否则后续保存文件时会丢失文件头的前 8 个字节
+                # 指针必须归位，否则后续保存文件时会丢失文件头的前 8 个字节
                 value.seek(0)
             except Exception as e:
                 raise serializers.ValidationError("文件读取失败，请重新上传")
@@ -111,6 +113,44 @@ class DocumentUploadSerializer(serializers.Serializer):
             if not match:
                 raise serializers.ValidationError(f"文件后缀与真实内容不匹配，禁止上传伪装的 {ext} 文件")
         # txt 无固定魔数，直接放行
+
+        # 损坏 / 加密文件预检
+        try:
+            if ext == '.pdf':
+                doc = fitz.open(stream=value, filetype="pdf")
+                if doc.is_encrypted:
+                    raise serializers.ValidationError("该 PDF 文件已加密，请解除密码后上传")
+                doc.close()
+            elif ext == '.docx':
+                with zipfile.ZipFile(value) as z:
+                    bad_file = z.testzip()
+                    if bad_file is not None:
+                        raise serializers.ValidationError("DOCX 文件已损坏或格式不完整")
+            elif ext == '.txt':
+                # TXT 预检：防空文件、编码异常、二进制伪装
+                head_bytes = value.read(4096)
+                if not head_bytes.strip():
+                    raise serializers.ValidationError("TXT 文件内容为空，无法解析")
+
+                is_valid_text = False
+                for encoding in ['utf-8', 'gbk', 'gb18030']:
+                    try:
+                        decoded_str = head_bytes.decode(encoding)
+                        control_chars = sum(1 for c in decoded_str if ord(c) < 32 and c not in '\n\r\t')
+                        if control_chars > len(decoded_str) * 0.05:
+                            continue
+                        is_valid_text = True
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                if not is_valid_text:
+                    raise serializers.ValidationError("TXT 文件编码异常或疑似二进制文件伪装，请检查文件内容")
+        except serializers.ValidationError as e:
+            raise e
+        except Exception:
+            raise serializers.ValidationError("文件校验失败，可能已损坏")
+        finally:
+            value.seek(0)
 
         return value
 
@@ -225,6 +265,44 @@ class DocumentNewVersionSerializer(serializers.Serializer):
             match = any(header.startswith(magic) for magic in magic_list)
             if not match:
                 raise serializers.ValidationError(f"文件后缀与真实内容不匹配，禁止上传伪装的 {ext} 文件")
+
+            # 损坏 / 加密文件预检
+            try:
+                if ext == '.pdf':
+                    doc = fitz.open(stream=value, filetype="pdf")
+                    if doc.is_encrypted:
+                        raise serializers.ValidationError("该 PDF 文件已加密，请解除密码后上传")
+                    doc.close()
+                elif ext == '.docx':
+                    with zipfile.ZipFile(value) as z:
+                        bad_file = z.testzip()
+                        if bad_file is not None:
+                            raise serializers.ValidationError("DOCX 文件已损坏或格式不完整")
+                elif ext == '.txt':
+                    # TXT 预检：防空文件、编码异常、二进制伪装
+                    head_bytes = value.read(4096)
+                    if not head_bytes.strip():
+                        raise serializers.ValidationError("TXT 文件内容为空，无法解析")
+    
+                    is_valid_text = False
+                    for encoding in ['utf-8', 'gbk', 'gb18030']:
+                        try:
+                            decoded_str = head_bytes.decode(encoding)
+                            control_chars = sum(1 for c in decoded_str if ord(c) < 32 and c not in '\n\r\t')
+                            if control_chars > len(decoded_str) * 0.05:
+                                continue
+                            is_valid_text = True
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    if not is_valid_text:
+                        raise serializers.ValidationError("TXT 文件编码异常或疑似二进制文件伪装，请检查文件内容")
+            except serializers.ValidationError as e:
+                raise e
+            except Exception:
+                raise serializers.ValidationError("文件校验失败，可能已损坏")
+            finally:
+                value.seek(0)
         
         return value
 
