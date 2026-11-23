@@ -16,6 +16,7 @@ from .base import BaseParser
 logger = logging.getLogger(__name__)
 
 
+# 文档PDF、Docx、Doc格式解析
 class MinerUParser(BaseParser):
     """
     基于 MinerU 微服务的文档解析器

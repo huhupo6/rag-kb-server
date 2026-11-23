@@ -2,6 +2,7 @@
 
 from .base import BaseParser
 
+# Txt格式解析
 class TxtParser(BaseParser):
     """纯文本txt解析器"""
     def parse(self, file_path: str) -> str:

@@ -1,17 +1,30 @@
+# 内置标准库
 import os
 import logging
+import re
 
+# Django
 from django.conf import settings
 from django.db import transaction
 
+# DRF
 from rest_framework import serializers
 
+# 本地业务模块
 from .models import Document
 from .tasks import parse_document
 
 logger = logging.getLogger(__name__)
 
+# 魔数字典：key=文件后缀，value=对应合法二进制文件头
+# txt无固定文件头，为空元组，跳过魔数校验
+MAGIC_NUMBERS = { 
+    ".pdf": (b"%PDF-",), 
+    ".docx": (b"PK\x03\x04",), 
+    ".txt": (),  
+    }
 
+# 安全安全清洗函数
 def save_uploaded_file(file_obj, doc_id):
     """
     安全保存上传文件工具函数
@@ -22,23 +35,40 @@ def save_uploaded_file(file_obj, doc_id):
     :param doc_id: 文档主键，用于生成唯一文件名
     :return: relative_path(相对存储路径), full_path(磁盘绝对路径)
     """
-    # 提取纯净文件名，过滤 ../ 这类恶意路径
-    safe_name = os.path.basename(file_obj.name)
+    # 拿到原始文件名，剥离前面所有路径，只保留文件名本身，防御路径穿越
+    raw_name = os.path.basename(file_obj.name)
 
-    # 拼接相对路径，带上 doc_id 防止同名覆盖
+    # 如果拿到的是空字符串（比如用户输入纯 ../ 这种），直接抛异常阻断
+    if not raw_name:
+        raise ValueError("文件名非法")
+
+    # 正则替换：把 Windows / Linux 系统不允许在文件名里出现的特殊字符，统一替换成下划线 _
+    # 禁止字符：< > : " / \ | ? *
+    safe_name = re.sub(r'[<>:"/\\|?*]', '_', raw_name)
+
+    # 截断文件名，最长128字符，防止超长文件名导致存储报错
+    safe_name = safe_name[:128]
+
+    # 拼接相对存储路径：documents目录 + doc_id_清洗后的文件名
+    # 带上doc_id，就算原文件名一样，最终文件名称也不会重复，避免覆盖
     relative_path = os.path.join('documents', f'{doc_id}_{safe_name}')
+
+    # 拼接磁盘绝对路径：MEDIA_ROOT是Django配置的静态文件根目录
     full_path = os.path.join(settings.MEDIA_ROOT, relative_path)
 
-    # 如果目录不存在则自动创建
+    # 递归创建文件夹，目录已经存在也不会报错（exist_ok=True）
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    # 分块写入磁盘，用于文件上传
+
+    # 二进制写入模式打开文件
     with open(full_path, 'wb+') as f:
+        # DRF的文件对象分块迭代写入，不会一次性把整个大文件加载进内存，适合大文件上传
         for chunk in file_obj.chunks():
             f.write(chunk)
 
-    return relative_path, full_path
+    # 返回三个值：相对路径（存数据库）、磁盘绝对路径（程序读取用）、清洗后的文件名（展示给前端）
+    return relative_path, full_path, safe_name
 
-
+# 全新文档上传序列化器
 class DocumentUploadSerializer(serializers.Serializer):
     """
     全新文档上传序列化器
@@ -56,12 +86,31 @@ class DocumentUploadSerializer(serializers.Serializer):
         - 文件后缀白名单：pdf / docx / txt
         - 文件大小上限：50MB
         """
+        # 拿到文件后缀，转小写，统一判断
         ext = os.path.splitext(value.name)[1].lower()
+        # 后缀白名单：只允许 pdf / docx / txt
         if ext not in ['.pdf', '.docx', '.txt']:
             raise serializers.ValidationError('仅支持 PDF / DOCX / TXT 格式')
-
+        # 限制单文件最大 50MB
         if value.size > 50 * 1024 * 1024:
             raise serializers.ValidationError('文件不能超过 50MB')
+
+        # 魔数校验
+        magic_list = MAGIC_NUMBERS[ext]
+        if magic_list:
+            try:
+                # 读取前 8 字节，足够判断文件头
+                header = value.read(8)
+                # 【关键】指针必须归位，否则后续保存文件时会丢失文件头的前 8 个字节
+                value.seek(0)
+            except Exception as e:
+                raise serializers.ValidationError("文件读取失败，请重新上传")
+            
+            # 匹配任意一个合法魔数即通过
+            match = any(header.startswith(magic) for magic in magic_list)
+            if not match:
+                raise serializers.ValidationError(f"文件后缀与真实内容不匹配，禁止上传伪装的 {ext} 文件")
+        # txt 无固定魔数，直接放行
 
         return value
 
@@ -76,12 +125,14 @@ class DocumentUploadSerializer(serializers.Serializer):
         tenant = user.tenant
         max_docs = 10 if tenant.plan_type == 'free' else 500
 
+        # 统计该租户下，正在生效、没有软删除的文档数量
         current_docs_count = Document.objects.filter(
             tenant=tenant,
             is_current=True,
             is_deleted=False
         ).count()
 
+        # 达到配额上限，拒绝上传
         if current_docs_count >= max_docs:
             plan_name = "轻享版" if tenant.plan_type == 'free' else "专业版"
             raise serializers.ValidationError(
@@ -105,12 +156,11 @@ class DocumentUploadSerializer(serializers.Serializer):
 
         try:
             with transaction.atomic():
-                safe_name = os.path.basename(validated_data['file'].name)
-
+                # 先创建文档记录，初始file_name、file_path为空
                 doc = Document.objects.create(
                     tenant=user.tenant,
                     category=validated_data['category'],
-                    file_name=safe_name,
+                    file_name='',
                     file_path='',
                     version=1,
                     parent_doc_id=None,
@@ -119,16 +169,21 @@ class DocumentUploadSerializer(serializers.Serializer):
                     uploaded_by=user,
                 )
 
-                relative_path, full_path = save_uploaded_file(validated_data['file'], doc.id)
+                # 调用文件保存函数，拿到清洗后的文件名、相对路径、绝对路径
+                relative_path, full_path, safe_name = save_uploaded_file(validated_data['file'], doc.id)
+                # 回填清洗后的文件名和存储路径
+                doc.file_name = safe_name
                 doc.file_path = relative_path
-                doc.save(update_fields=['file_path'])
+                doc.save(update_fields=['file_name', 'file_path'])
 
-                # 事务提交之后再启动解析，避免回滚后出现无效任务
+                # 事务提交成功之后，投递Celery异步任务
+                # 避免回滚后出现无效任务
                 transaction.on_commit(lambda: parse_document.delay(doc.id))
 
                 return doc
+            
         except Exception as e:
-            # 事务回滚，清理已经落地的文件
+            # 异常兜底：事务回滚，清理已经落地到磁盘的孤儿文件
             if full_path and os.path.exists(full_path):
                 try:
                     os.remove(full_path)
@@ -137,7 +192,7 @@ class DocumentUploadSerializer(serializers.Serializer):
                     logger.error(f"清理文件失败: {remove_err}")
             raise e
 
-
+# 文档新版本上传序列化器
 class DocumentNewVersionSerializer(serializers.Serializer):
     """
     文档新版本上传序列化器
@@ -148,7 +203,7 @@ class DocumentNewVersionSerializer(serializers.Serializer):
 
     def validate_file(self, value):
         """
-        新版本文件校验，和新建文档保持一致：后缀 + 文件大小
+        新版本文件校验，和新建文档校验保持一致：后缀 + 大小 + 魔数校验，安全口径统一
         """
         ext = os.path.splitext(value.name)[1].lower()
         if ext not in ['.pdf', '.docx', '.txt']:
@@ -156,6 +211,21 @@ class DocumentNewVersionSerializer(serializers.Serializer):
 
         if value.size > 50 * 1024 * 1024:
             raise serializers.ValidationError('文件不能超过 50MB')
+
+        magic_list = MAGIC_NUMBERS[ext]
+        if magic_list:
+            try:
+                # 读取前 8 字节，足够判断文件头
+                header = value.read(8)
+                # 【关键】指针必须归位，否则后续保存文件时会丢失文件头的前 8 个字节
+                value.seek(0)
+            except Exception as e:
+                raise serializers.ValidationError("文件读取失败，请重新上传")
+            
+            match = any(header.startswith(magic) for magic in magic_list)
+            if not match:
+                raise serializers.ValidationError(f"文件后缀与真实内容不匹配，禁止上传伪装的 {ext} 文件")
+        
         return value
 
     def create(self, validated_data):
@@ -173,17 +243,15 @@ class DocumentNewVersionSerializer(serializers.Serializer):
 
         try:
             with transaction.atomic():
-                # 旧版本下线
+                # 旧版本下线，不再是当前生效版本
                 old_doc.is_current = False
                 old_doc.save(update_fields=['is_current'])
-
-                safe_name = os.path.basename(validated_data['file'].name)
 
                 # 创建新版本记录，继承分类、归属，版本号 +1
                 new_doc = Document.objects.create(
                     tenant=user.tenant,
                     category=old_doc.category,
-                    file_name=safe_name,
+                    file_name='',
                     file_path='',
                     version=old_doc.version + 1,
                     parent_doc_id=old_doc.parent_doc_id or old_doc.id,
@@ -192,14 +260,19 @@ class DocumentNewVersionSerializer(serializers.Serializer):
                     uploaded_by=user,
                 )
 
-                relative_path, full_path = save_uploaded_file(validated_data['file'], new_doc.id)
+                # 调用保存函数，拿到清洗后的文件名、路径
+                relative_path, full_path, safe_name = save_uploaded_file(validated_data['file'], new_doc.id)                     
                 new_doc.file_path = relative_path
-                new_doc.save(update_fields=['file_path'])
+                new_doc.file_name = safe_name
+                new_doc.save(update_fields=['file_path', 'file_name'])
 
+                # 事务提交后 发起解析任务
                 transaction.on_commit(lambda: parse_document.delay(new_doc.id))
 
                 return new_doc
+            
         except Exception as e:
+            # 异常兜底清理孤儿文件
             if full_path and os.path.exists(full_path):
                 try:
                     os.remove(full_path)

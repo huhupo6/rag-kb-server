@@ -20,7 +20,7 @@ from .services.clients import get_milvus_client
 # 初始化本模块日志器
 logger = logging.getLogger(__name__)
 
-
+# 文档上传接口
 @api_view(['POST'])
 def upload_document(request):
     """

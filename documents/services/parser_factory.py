@@ -5,6 +5,7 @@
 # 当前app自定义模块
 from .parsers import MinerUParser, TxtParser
 
+# 文档分发
 def get_parser(suffix: str):
     """
     根据文件后缀分发对应的文档解析器
