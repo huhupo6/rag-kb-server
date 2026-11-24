@@ -29,14 +29,17 @@ def generate_stream(query: str, contexts: list):
         yield "抱歉，知识库中未找到相关内容，请联系管理员补充。"
         return
 
-    # 拼接检索到的参考资料片段
-    context_text = "\n\n".join([f"【资料{i+1}】\n{ctx['content']}" for i, ctx in enumerate(contexts)])
+    context_text = ""
+    for i, ctx in enumerate(contexts):
+        doc_name = ctx.get('file_name', '未知文档') 
+        context_text += f"【资料{i+1}】(来自文件: {doc_name})\n{ctx['content']}\n\n"
 
     system_prompt = """你是一个严谨的企业知识库助手。
 请严格遵守以下规则：
 1. 仅根据【资料片段】回答用户问题。
-2. 如果资料片段中没有明确的数字、日期或具体结论，请直接回复：“知识库中未找到明确规定，请联系企业管理员”。
-3. 严禁根据外部常识推测或编造。"""
+2. 在回答的每一句话末尾，必须使用 `[资料1]`、`[资料2]` 格式标注你的引用来源（X为资料序号，例如[资料1]）。
+3. 如果资料片段中没有明确的数字、日期或具体结论，请直接回复：“知识库中未找到明确规定，请联系企业管理员”。
+4. 严禁根据外部常识推测或编造。"""
 
     user_prompt = f"【资料片段】\n{context_text}\n\n【用户问题】\n{query}"
 
@@ -89,13 +92,17 @@ def generate_sync(query: str, contexts: list) -> tuple[str, dict]:
             "total_tokens": 0
         }
 
-    context_text = "\n\n".join([f"【资料{i+1}】\n{ctx['content']}" for i, ctx in enumerate(contexts)])
+    context_text = ""
+    for i, ctx in enumerate(contexts):
+        doc_name = ctx.get('file_name', '未知文档')
+        context_text += f"【资料{i+1}】(来自文件: {doc_name})\n{ctx['content']}\n\n"
 
     system_prompt = """你是一个严谨的企业知识库助手。
 请严格遵守以下规则：
 1. 仅根据【资料片段】回答用户问题。
-2. 如果资料片段中没有明确的数字、日期或具体结论，请直接回复：“知识库中未找到明确规定，请联系企业管理员”。
-3. 严禁根据外部常识推测或编造。"""
+2. 在回答的每一句话末尾，必须使用 `[资料1]`、`[资料2]` 格式标注你的引用来源（X为资料序号，例如[资料1]）。
+3. 如果资料片段中没有明确的数字、日期或具体结论，请直接回复：“知识库中未找到明确规定，请联系企业管理员”。
+4. 严禁根据外部常识推测或编造。"""
 
     user_prompt = f"【资料片段】\n{context_text}\n\n【用户问题】\n{query}"
 

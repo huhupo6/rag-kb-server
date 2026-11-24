@@ -65,19 +65,37 @@ def build_prompt(question: str, chunks: list[DocumentChunk]) -> tuple[str, str]:
     :param chunks: 召回的文档片段列表
     :return: system_prompt, user_prompt
     """
-    context = ""
+    context_text = ""
     for idx, chunk in enumerate(chunks):
-        context += f"【资料{idx+1}】{chunk.content}\n\n"
+        # 拼入文档名和块序号
+        doc_name = chunk.document.file_name if hasattr(chunk, 'document') else "未知文档"
+        context_text += f"【资料{idx+1}】(来自文件: {doc_name})\n{chunk.content}\n\n"
 
     system_prompt = """你是一个严谨的企业知识库助手。
 请严格遵守以下规则：
 1. 仅根据【资料片段】回答用户问题。
-2. 如果资料片段中没有明确的数字、日期或具体结论，请直接回复：“知识库中未找到明确规定，请联系企业管理员”。
-3. 严禁根据外部常识推测或编造。"""
+2. 在回答的每一句话末尾，必须使用 `[资料1]`、`[资料2]` 格式标注你的引用来源（X为资料序号，例如[资料1]）。
+3. 如果资料片段中没有明确的数字、日期或具体结论，请直接回复：“知识库中未找到明确规定，请联系企业管理员”。
+4. 严禁根据外部常识推测或编造。"""
 
-    user_prompt = f"【资料片段】\n{context}\n【用户问题】\n{question}"
+    user_prompt = f"【资料片段】\n{context_text}\n【用户问题】\n{question}"
     return system_prompt, user_prompt
 
+def verify_citations(answer: str, chunks: list[DocumentChunk]) -> str:
+    
+    if not chunks:
+        return answer
+        
+    # 找出回答中所有 [资料X]
+    cited_matches = re.findall(r'\[资料(.*?)\]', answer)
+    max_valid_idx = len(chunks)
+    
+    for match in cited_matches:
+        # 如果模型输出的是 [资料X]，或者无法转为数字，或者超出范围
+        if not match.isdigit() or int(match) < 1 or int(match) > max_valid_idx:
+            answer = answer.replace(f"[资料{match}]", "[引用异常]")
+            
+    return answer
 
 def ask_llm(question: str, chunks: list[DocumentChunk]) -> tuple[str, dict]:
     """
@@ -107,6 +125,8 @@ def ask_llm(question: str, chunks: list[DocumentChunk]) -> tuple[str, dict]:
         )
 
         answer = response.choices[0].message.content
+
+        answer = verify_citations(answer, chunks)
 
         # 封装token用量，用于写入chat_history记录表
         usage_data = {

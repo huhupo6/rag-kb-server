@@ -1,17 +1,15 @@
 # 1. Python 内置
 import json
 import datetime
-import traceback
-import asyncio
-from typing import Generator, AsyncGenerator, Optional
+import re
+from typing import Generator, Optional
 
 # 2. 第三方
 import logging
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import pymysql
-from pymysql.err import OperationalError
 
 # 3. 项目自定义模块
 from rag_engine import hybrid_search
@@ -36,6 +34,24 @@ class ChatRequest(BaseModel):
     tenant_id: int
     user_id: int
     query: str
+
+def verify_citations(answer: str, contexts: list) -> str:
+    """
+    校验模型标注的引用是否合法，防止模型产生 [资料X] 或 [资料99] 这种幻觉
+    """
+    if not contexts:
+        return answer
+        
+    # 匹配所有的 [资料...] 格式
+    cited_matches = re.findall(r'\[资料(.*?)\]', answer)
+    max_valid_idx = len(contexts)
+    
+    for match in cited_matches:
+        # 如果模型输出的是 [资料X]，或者无法转为数字，或者超出范围
+        if not match.isdigit() or int(match) < 1 or int(match) > max_valid_idx:
+            answer = answer.replace(f"[资料{match}]", "[引用异常]")
+            
+    return answer
 
 def get_db_conn():
     """获取数据库连接上下文"""
@@ -134,7 +150,8 @@ def stream_and_save(request: ChatRequest, contexts: list) -> Generator[str, None
     if usage_data:
         total_tokens = usage_data.get("total_tokens", 0)
         incr_tenant_token_usage(request.tenant_id, total_tokens)
-        save_chat_to_db(request, contexts, full_answer, usage_data)
+        cleaned_answer = verify_citations(full_answer, contexts)
+        save_chat_to_db(request, contexts, cleaned_answer, usage_data)
 
 @app.post("/api/chat")
 async def chat_with_rag(request: ChatRequest):
@@ -201,11 +218,12 @@ def chat_test(request: ChatRequest):
         answer, usage_data = generate_sync(request.query, contexts)
         total_tokens = usage_data.get("total_tokens", 0)
         incr_tenant_token_usage(request.tenant_id, total_tokens)
-        save_chat_to_db(request, contexts, answer, usage_data)
+        cleaned_answer = verify_citations(answer, contexts)
+        save_chat_to_db(request, contexts, cleaned_answer, usage_data)
 
         return {
             "code": 200,
-            "answer": answer,
+            "answer": cleaned_answer,
             "cited_chunks_count": len(contexts),
             "tokens_used": total_tokens
         }
