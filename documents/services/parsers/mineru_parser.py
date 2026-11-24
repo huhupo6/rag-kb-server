@@ -54,7 +54,7 @@ class MinerUParser(BaseParser):
                     self.api_url,
                     params=params,
                     files=files,
-                    timeout=700
+                    timeout=280
                 )
                 # 请求状态码非200直接抛异常
                 response.raise_for_status()
