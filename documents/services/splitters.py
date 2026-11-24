@@ -6,6 +6,13 @@ import jieba
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from kb_tokenizer import tokenize_text
 
+# 将 Splitter 实例化（全局单例）
+_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=400, 
+    chunk_overlap=50,
+    separators=["\n\n", "\n", "。", "！", "？", "；", " ", ""]
+)
+
 def split_into_chunks(text: str):
     """
     递归字符分块，带表格保护策略，适配中文文档
@@ -30,12 +37,8 @@ def split_into_chunks(text: str):
         # 1. 处理表格前面的普通正文
         pre_text = text[last_pos:match.start()].strip()
         if pre_text:
-            splitter = RecursiveCharacterTextSplitter(
-                chunk_size=400,
-                chunk_overlap=50,
-                separators=["\n\n", "\n", "。", "！", "？", "；", " ", ""]
-            )
-            chunks.extend(splitter.split_text(pre_text))
+            # 直接复用全局 _splitter，不再每次新建
+            chunks.extend(_splitter.split_text(pre_text))
 
         # 2. 处理表格本身，优先整块保留
         table_text = match.group(1).strip()
@@ -51,13 +54,8 @@ def split_into_chunks(text: str):
     # 3. 处理最后一张表格之后剩下的正文
     post_text = text[last_pos:].strip()
     if post_text:
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=400,
-            chunk_overlap=50,
-            separators=["\n\n", "\n", "。", "！", "？", "；", " ", ""]
-        )
-        chunks.extend(splitter.split_text(post_text))
-
+        chunks.extend(_splitter.split_text(post_text))
+        
     # 剔除空白块
     return [c.strip() for c in chunks if c.strip()]
 
