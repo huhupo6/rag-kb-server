@@ -59,6 +59,7 @@ services:
   celery_worker:
     build: .
     container_name: kb_celery_worker
+    mem_limit: 2g
     restart: always
     command: celery -A kb_project worker -l info --concurrency=4
     volumes:
@@ -111,6 +112,7 @@ services:
       context: .
       dockerfile: Dockerfile.mineru.cpu
     container_name: mineru-api
+    mem_limit: 4g
     restart: always
     command: ["mineru-api", "--host", "0.0.0.0", "--port", "8000"]
     ports:

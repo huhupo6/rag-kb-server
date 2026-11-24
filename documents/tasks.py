@@ -54,6 +54,11 @@ def parse_document(self, doc_id):
         # 按文件类型获取解析器（底层MinerU，支持PDF/DOCX跨页表格识别合并）
         parser = get_parser(suffix)
         raw_text = parser.parse(full_path)
+
+        # 文本大小熔断：假设超过 100 万字符（约 2MB 纯文本），直接判定失败
+        if len(raw_text) > 1_000_000:
+            raise ValueError("解析文本内容过大，超出系统处理上限，请拆分文档后上传")
+
         # 清洗Markdown多余标签、脏格式
         text = clean_markdown(raw_text)
 
