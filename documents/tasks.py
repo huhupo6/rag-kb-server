@@ -5,7 +5,7 @@ import logging
 # 2. 第三方库
 import requests
 from celery import shared_task
-from celery.exceptions import MaxRetriesExceededError
+from celery.exceptions import MaxRetriesExceededError, SoftTimeLimitExceeded
 
 # 3. Django
 from django.conf import settings
@@ -168,11 +168,26 @@ def parse_document(self, doc_id):
         logger.warning(f"文档 {doc_id} 解析遇到网络异常，准备重试: {exc}")
         raise self.retry(exc=exc)
 
+    # 捕获 Celery 软超时（防止 MinerU 卡死导致 Worker 长期被占用）
+    except SoftTimeLimitExceeded:
+        logger.error(f"文档 {doc_id} 解析超时（SoftTimeLimitExceeded），已被强制中断")
+        doc.status = 'failed'
+        doc.error_message = "解析超时：文件过大或解析服务卡死，请重试或联系管理员"
+        doc.save(update_fields=['status', 'error_message'])
+
+        return f'解析超时: {doc_id}'
+
     except Exception as exc:
         # 全局异常捕获：标记文档解析失败，记录错误信息
         logger.error(f"文档 {doc_id} 解析彻底失败: {exc}", exc_info=True)
         doc.status = 'failed'
-        doc.error_message = str(exc)[:500]
+
+        # 判断是否是因为重试耗尽导致的失败
+        if isinstance(exc, MaxRetriesExceededError):
+            doc.error_message = "解析失败：MinerU 微服务网络持续异常，请稍后重新上传"
+        else:
+            doc.error_message = str(exc)[:500]
+        
         doc.save(update_fields=['status', 'error_message'])
         # 抛出异常，触发 RabbitMQ 的死信机制 (x-dead-letter-exchange)
         raise exc

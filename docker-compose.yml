@@ -60,7 +60,7 @@ services:
     build: .
     container_name: kb_celery_worker
     restart: always
-    command: celery -A kb_project worker -l info
+    command: celery -A kb_project worker -l info --concurrency=4
     volumes:
       - .:/app
       - media_data:/app/media

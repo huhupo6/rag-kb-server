@@ -138,6 +138,7 @@ RABBITMQ_PORT = os.getenv('RABBITMQ_PORT', 5672)
 RABBITMQ_USER = os.getenv('RABBITMQ_USER')
 RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD')
 
+
 if not RABBITMQ_PASSWORD:
     raise ValueError("安全警告：未在.env中配置 RABBITMQ_PASSWORD！")
 
@@ -164,6 +165,9 @@ CELERY_TASK_QUEUES = (
 # Celery 相关容错配置
 CELERY_TASK_ACKS_LATE = True                # 任务执行完才发送 ACK（防止 Worker 崩溃导致任务丢失）
 CELERY_TASK_REJECT_ON_WORKER_LOST = True    # Worker 意外退出时拒绝任务，触发死信机制
+# Celery 软/硬超时 (单位：秒)
+CELERY_TASK_SOFT_TIME_LIMIT = 300  # 软超时：5分钟，抛出异常，允许优雅退出
+CELERY_TASK_TIME_LIMIT = 360       # 硬超时：6分钟，强杀进程，防止 Worker 死锁
 
 CELERY_RESULT_BACKEND = REDIS_URL
 

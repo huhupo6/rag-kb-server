@@ -61,9 +61,6 @@ class MinerUParser(BaseParser):
 
             result = response.json()
 
-            # 调试时可以解除下面这行的注释，平时不用打印
-            # logger.info(f"========= MinerU返回的原始数据: {result} =========")
-
             markdown_text = ""
             try:
                 if 'files' in result and len(result['files']) > 0:
